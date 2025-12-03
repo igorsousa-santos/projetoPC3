@@ -1,3 +1,4 @@
+
 # Music Horizon - React
 
 Uma aplicação moderna de descoberta musical que utiliza Last.fm para recomendações e Spotify para reprodução e exportação de playlists.
@@ -127,3 +128,4 @@ MIT
 ## 🤝 Contribuindo
 
 Contribuições são bem-vindas! Sinta-se à vontade para abrir issues ou pull requests.
+
