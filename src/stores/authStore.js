@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import spotifyService from '../services/spotify';
 import lastfmService from '../services/lastfm';
-import * as localAuth from '../services/localAuth';
+import { userAPI } from '../services/api';
 import useGamificationStore from './gamificationStore';
 
 const useAuthStore = create((set, get) => ({
@@ -12,59 +12,65 @@ const useAuthStore = create((set, get) => ({
     isLoading: true,
     authType: null, // 'local' | 'spotify' | null
     spotifyConnected: false,
-    spotifyUserId: null, // Store Spotify User ID explicitly
+    spotifyUserId: null,
 
     // Last.fm state
     lastfmSessionKey: null,
     lastfmUser: null,
 
-    // Initialize auth from storage
-    init: () => {
-        // Check for local user first
-        const localUser = localAuth.getCurrentUser();
+    // Initialize auth from storage - INTEGRADO COM BACKEND
+    init: async () => {
+        const authToken = localStorage.getItem('auth_token');
         const storedSpotifyUserId = localStorage.getItem('spotify_user_id');
         const storedLastFmSession = localStorage.getItem('lastfm_session_key');
         const storedLastFmUser = localStorage.getItem('lastfm_user');
 
-        if (localUser) {
+        if (authToken) {
+            try {
+                // Verificar se o token ainda é válido buscando o usuário atual
+                const response = await userAPI.getCurrentUser();
+                if (response.success && response.data) {
+                    set({
+                        user: response.data,
+                        isAuthenticated: true,
+                        authType: 'local',
+                        isLoading: false,
+                        spotifyUserId: storedSpotifyUserId,
+                        lastfmSessionKey: storedLastFmSession,
+                        lastfmUser: storedLastFmUser ? JSON.parse(storedLastFmUser) : null
+                    });
+
+                    // Check if Spotify is also connected
+                    const spotifyToken = spotifyService.getToken();
+                    if (spotifyToken) {
+                        set({ token: spotifyToken, spotifyConnected: true });
+                        get().fetchSpotifyUser();
+                    }
+                    return;
+                }
+            } catch (error) {
+                console.error('Token inválido ou expirado:', error);
+                localStorage.removeItem('auth_token');
+            }
+        }
+
+        // Check for Spotify only auth (legacy)
+        const spotifyToken = spotifyService.getToken();
+        if (spotifyToken) {
             set({
-                user: localUser,
+                token: spotifyToken,
                 isAuthenticated: true,
-                authType: 'local',
-                isLoading: false,
+                authType: 'spotify',
+                spotifyConnected: true,
                 spotifyUserId: storedSpotifyUserId,
                 lastfmSessionKey: storedLastFmSession,
                 lastfmUser: storedLastFmUser ? JSON.parse(storedLastFmUser) : null
             });
-
-            // Check if Spotify is also connected
-            const token = spotifyService.getToken();
-            if (token) {
-                set({ token, spotifyConnected: true });
-                // Refresh user profile in background to ensure ID is valid
-                get().fetchSpotifyUser();
-            }
+            get().fetchSpotifyUser();
         } else {
-            // Check for Spotify only auth (legacy)
-            const token = spotifyService.getToken();
-            if (token) {
-                set({
-                    token,
-                    isAuthenticated: true,
-                    authType: 'spotify',
-                    spotifyConnected: true,
-                    spotifyUserId: storedSpotifyUserId,
-                    lastfmSessionKey: storedLastFmSession,
-                    lastfmUser: storedLastFmUser ? JSON.parse(storedLastFmUser) : null
-                });
-                get().fetchSpotifyUser();
-            } else {
-                set({ isLoading: false });
-            }
+            set({ isLoading: false });
         }
     },
-
-    // ... (existing local/spotify actions) ...
 
     // Last.fm Login
     loginLastFM: () => {
@@ -79,7 +85,7 @@ const useAuthStore = create((set, get) => ({
             const session = await lastfmService.getSession(token);
             if (session) {
                 localStorage.setItem('lastfm_session_key', session.key);
-                localStorage.setItem('lastfm_user', JSON.stringify(session.name)); // Session usually has name/key
+                localStorage.setItem('lastfm_user', JSON.stringify(session.name));
 
                 set({
                     lastfmSessionKey: session.key,
@@ -103,34 +109,47 @@ const useAuthStore = create((set, get) => ({
         });
     },
 
-    // Local signup
-    signupLocal: (name, email) => {
-        const user = localAuth.signup(name, email);
-        set({
-            user,
-            isAuthenticated: true,
-            authType: 'local',
-            isLoading: false
-        });
-        return user;
-    },
-
-    // Local login
-    loginLocal: (email) => {
-        const user = localAuth.login(email);
-        if (user) {
-            set({
-                user,
-                isAuthenticated: true,
-                authType: 'local',
-                isLoading: false
-            });
-            return true;
+    // Local signup - INTEGRADO COM BACKEND
+    signupLocal: async (name, email, password = '') => {
+        try {
+            const response = await userAPI.signup(name, email, password);
+            if (response.success && response.data) {
+                set({
+                    user: response.data.user,
+                    isAuthenticated: true,
+                    authType: 'local',
+                    isLoading: false
+                });
+                return response.data.user;
+            }
+            throw new Error(response.message || 'Erro ao criar conta');
+        } catch (error) {
+            console.error('Signup error:', error);
+            throw error;
         }
-        return false;
     },
 
-    // Spotify login (can be initial login or connecting to existing local account)
+    // Local login - INTEGRADO COM BACKEND
+    loginLocal: async (email, password = '') => {
+        try {
+            const response = await userAPI.login(email, password);
+            if (response.success && response.data) {
+                set({
+                    user: response.data.user,
+                    isAuthenticated: true,
+                    authType: 'local',
+                    isLoading: false
+                });
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.error('Login error:', error);
+            return false;
+        }
+    },
+
+    // Spotify login
     loginSpotify: async () => {
         const authUrl = await spotifyService.getAuthUrl();
         window.location.href = authUrl;
@@ -141,16 +160,15 @@ const useAuthStore = create((set, get) => ({
         get().loginSpotify();
     },
 
-    // Disconnect Spotify (keep local account)
+    // Disconnect Spotify
     disconnectSpotify: () => {
         spotifyService.logout();
-        localStorage.removeItem('spotify_user_id'); // Clear storage
+        localStorage.removeItem('spotify_user_id');
         set({
             token: null,
             spotifyConnected: false,
             spotifyUserId: null
         });
-        // Keep local user data
     },
 
     // Handle Spotify callback
@@ -162,10 +180,8 @@ const useAuthStore = create((set, get) => ({
             console.log('[AuthStore] Token received, updating state...');
             set({ token, spotifyConnected: true });
 
-            // Track Spotify connection for gamification
             useGamificationStore.getState().trackSpotifyConnected();
 
-            // If no local user exists, create one from Spotify data
             if (!get().user) {
                 console.log('[AuthStore] No local user, creating from Spotify data...');
                 await get().fetchSpotifyUser(true);
@@ -193,43 +209,80 @@ const useAuthStore = create((set, get) => ({
         try {
             const spotifyUser = await spotifyService.getUserProfile();
 
-            // Always set the Spotify User ID and persist it
             localStorage.setItem('spotify_user_id', spotifyUser.id);
             set({ spotifyUserId: spotifyUser.id });
 
             if (createLocalUser) {
-                // Create local user from Spotify data
-                const user = localAuth.signup(spotifyUser.display_name, spotifyUser.email);
-                set({
-                    user,
-                    isAuthenticated: true,
-                    authType: 'spotify',
-                    spotifyConnected: true,
-                    isLoading: false
-                });
+                // Criar usuário no backend a partir dos dados do Spotify
+                try {
+                    const response = await userAPI.signup(
+                        spotifyUser.display_name,
+                        spotifyUser.email
+                    );
+                    if (response.success && response.data) {
+                        set({
+                            user: response.data.user,
+                            isAuthenticated: true,
+                            authType: 'spotify',
+                            spotifyConnected: true,
+                            isLoading: false
+                        });
+                    }
+                } catch (error) {
+                    // Se o usuário já existe, tenta fazer login
+                    const loginResponse = await userAPI.login(spotifyUser.email);
+                    if (loginResponse.success && loginResponse.data) {
+                        set({
+                            user: loginResponse.data.user,
+                            isAuthenticated: true,
+                            authType: 'spotify',
+                            spotifyConnected: true,
+                            isLoading: false
+                        });
+                    }
+                }
             } else {
-                // Just mark Spotify as connected
                 set({ isLoading: false });
             }
         } catch (error) {
             console.error('Error fetching Spotify user:', error);
-            // Don't disconnect immediately on error, might be just a network blip
-            // get().disconnectSpotify(); 
+        }
+    },
+
+    // Update user profile - INTEGRADO COM BACKEND
+    updateUser: async (updates) => {
+        try {
+            const user = get().user;
+            if (!user) return null;
+
+            const response = await userAPI.update(user.id, updates);
+            if (response.success && response.data) {
+                set({ user: response.data });
+                return response.data;
+            }
+            return null;
+        } catch (error) {
+            console.error('Update user error:', error);
+            return null;
         }
     },
 
     // Logout
     logout: () => {
-        localAuth.logout();
+        userAPI.logout();
         spotifyService.logout();
-        localStorage.removeItem('spotify_user_id'); // Clear storage
+        localStorage.removeItem('spotify_user_id');
+        localStorage.removeItem('lastfm_session_key');
+        localStorage.removeItem('lastfm_user');
         set({
             token: null,
             user: null,
             isAuthenticated: false,
             authType: null,
             spotifyConnected: false,
-            spotifyUserId: null
+            spotifyUserId: null,
+            lastfmSessionKey: null,
+            lastfmUser: null
         });
     }
 }));

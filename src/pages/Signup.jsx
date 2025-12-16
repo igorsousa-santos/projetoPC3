@@ -5,11 +5,13 @@ import useAuthStore from '../stores/authStore';
 export default function Signup() {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
     const navigate = useNavigate();
     const signupLocal = useAuthStore(state => state.signupLocal);
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
 
@@ -23,11 +25,14 @@ export default function Signup() {
             return;
         }
 
+        setIsLoading(true);
         try {
-            signupLocal(name, email);
+            await signupLocal(name, email, password);
             navigate('/dashboard');
         } catch (err) {
-            setError('Erro ao criar conta. Tente novamente.');
+            setError(err.message || 'Erro ao criar conta. Tente novamente.');
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -61,6 +66,7 @@ export default function Signup() {
                                 className="w-full px-4 py-3 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-dark-text-muted focus:outline-none focus:ring-2 focus:ring-accent-blue focus:border-transparent transition-all"
                                 placeholder="Seu nome"
                                 required
+                                disabled={isLoading}
                             />
                         </div>
 
@@ -77,6 +83,23 @@ export default function Signup() {
                                 className="w-full px-4 py-3 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-dark-text-muted focus:outline-none focus:ring-2 focus:ring-accent-blue focus:border-transparent transition-all"
                                 placeholder="seu@email.com"
                                 required
+                                disabled={isLoading}
+                            />
+                        </div>
+
+                        {/* Password Input */}
+                        <div>
+                            <label htmlFor="password" className="block text-sm font-medium text-dark-text mb-2">
+                                Senha (opcional)
+                            </label>
+                            <input
+                                id="password"
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full px-4 py-3 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-dark-text-muted focus:outline-none focus:ring-2 focus:ring-accent-blue focus:border-transparent transition-all"
+                                placeholder="Sua senha"
+                                disabled={isLoading}
                             />
                         </div>
 
@@ -91,8 +114,9 @@ export default function Signup() {
                         <button
                             type="submit"
                             className="w-full btn-primary text-lg py-3"
+                            disabled={isLoading}
                         >
-                            Criar Conta
+                            {isLoading ? 'Criando conta...' : 'Criar Conta'}
                         </button>
                     </form>
 

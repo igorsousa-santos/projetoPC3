@@ -1,19 +1,31 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Header from '../components/Layout/Header';
 import usePlaylistStore from '../stores/playlistStore';
 import useAuthStore from '../stores/authStore';
 import usePlayerStore from '../stores/playerStore';
 import TrackCard from '../components/Player/TrackCard';
+import spotifyService from '../services/spotify';
 
 function Playlists() {
     const playlists = usePlaylistStore(state => state.playlists);
+    const isLoading = usePlaylistStore(state => state.isLoading);
+    const loadPlaylists = usePlaylistStore(state => state.loadPlaylists);
     const exportToSpotify = usePlaylistStore(state => state.exportToSpotify);
     const removePlaylistFromSpotify = usePlaylistStore(state => state.removePlaylistFromSpotify);
     const removePlaylist = usePlaylistStore(state => state.removePlaylist);
     const playTracks = usePlayerStore(state => state.playTracks);
     const spotifyUserId = useAuthStore(state => state.spotifyUserId);
+    const spotifyConnectedStore = useAuthStore(state => state.spotifyConnected);
     const [expandedId, setExpandedId] = useState(null);
     const [exporting, setExporting] = useState(null);
+
+    // Check if Spotify is actually connected with a valid token
+    const spotifyConnected = spotifyConnectedStore && spotifyService.isConnected();
+
+    // Carregar playlists ao montar o componente
+    useEffect(() => {
+        loadPlaylists();
+    }, [loadPlaylists]);
 
     const handleExport = async (playlistId) => {
         let currentSpotifyUserId = spotifyUserId;
@@ -55,9 +67,13 @@ function Playlists() {
         }
     };
 
-    const handleDelete = (playlistId) => {
+    const handleDelete = async (playlistId) => {
         if (confirm('Tem certeza que deseja excluir esta playlist?')) {
-            removePlaylist(playlistId);
+            try {
+                await removePlaylist(playlistId);
+            } catch (error) {
+                alert('Erro ao excluir playlist: ' + error.message);
+            }
         }
     };
 
@@ -101,20 +117,31 @@ function Playlists() {
                                             <i className={`ph ${expandedId === playlist.id ? 'ph-caret-up' : 'ph-caret-down'}`}></i>
                                         </button>
                                         {!playlist.exported ? (
-                                            <button
-                                                onClick={() => handleExport(playlist.id)}
-                                                disabled={exporting === playlist.id}
-                                                className="btn-primary"
-                                            >
-                                                {exporting === playlist.id ? (
-                                                    <div className="loader w-4 h-4"></div>
-                                                ) : (
-                                                    <>
-                                                        <i className="ph ph-spotify-logo mr-2"></i>
-                                                        Exportar
-                                                    </>
-                                                )}
-                                            </button>
+                                            spotifyConnected ? (
+                                                <button
+                                                    onClick={() => handleExport(playlist.id)}
+                                                    disabled={exporting === playlist.id}
+                                                    className="btn-primary"
+                                                >
+                                                    {exporting === playlist.id ? (
+                                                        <div className="loader w-4 h-4"></div>
+                                                    ) : (
+                                                        <>
+                                                            <i className="ph ph-spotify-logo mr-2"></i>
+                                                            Exportar
+                                                        </>
+                                                    )}
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    className="btn-secondary text-yellow-400 opacity-50 cursor-not-allowed"
+                                                    title="Conecte o Spotify para exportar"
+                                                    disabled
+                                                >
+                                                    <i className="ph ph-spotify-logo mr-2"></i>
+                                                    Conectar Spotify
+                                                </button>
+                                            )
                                         ) : (
                                             <button
                                                 onClick={() => handleRemoveFromSpotify(playlist.id)}

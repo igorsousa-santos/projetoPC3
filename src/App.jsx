@@ -10,6 +10,7 @@ import LastFMCallback from './pages/LastFMCallback';
 import Dashboard from './pages/Dashboard';
 import Search from './pages/Search';
 import ForYou from './pages/ForYou';
+import GeneratePlaylist from './pages/GeneratePlaylist';
 import Playlists from './pages/Playlists';
 import Profile from './pages/Profile';
 import Toast from './components/Toast';
@@ -70,6 +71,7 @@ function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="search" element={<Search />} />
           <Route path="for-you" element={<ForYou />} />
+          <Route path="generate" element={<GeneratePlaylist />} />
           <Route path="playlists" element={<Playlists />} />
           <Route path="profile" element={<Profile />} />
         </Route>

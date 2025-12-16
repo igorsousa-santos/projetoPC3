@@ -2,7 +2,7 @@ import usePlayerStore from '../../stores/playerStore';
 import useAuthStore from '../../stores/authStore';
 import usePreviewStore from '../../stores/previewStore';
 
-export default function TrackListItem({ track, index }) {
+export default function TrackListItem({ track, index, compact = false }) {
     const playTrack = usePlayerStore(state => state.playTrack);
     const spotifyConnected = useAuthStore(state => state.spotifyConnected);
     const { playPreview, currentTrack, isPlaying, isLoading } = usePreviewStore();
@@ -41,6 +41,28 @@ export default function TrackListItem({ track, index }) {
     };
 
     const hasImage = track.imageUrl && track.imageUrl !== '' && track.imageUrl !== 'undefined' && track.imageUrl !== '/default-album.png';
+
+    // Compact version for sidebars
+    if (compact) {
+        return (
+            <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors group cursor-pointer" onClick={handlePreview}>
+                <div
+                    className="w-10 h-10 rounded flex-shrink-0 overflow-hidden flex items-center justify-center"
+                    style={{ background: hasImage ? 'transparent' : getGradientColor(track.name) }}
+                >
+                    {hasImage ? (
+                        <img src={track.imageUrl} alt={track.name} className="w-full h-full object-cover" crossOrigin="anonymous" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.style.background = getGradientColor(track.name); }} />
+                    ) : (
+                        <i className="ph-fill ph-music-note text-white text-lg opacity-70"></i>
+                    )}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="text-white text-sm font-medium truncate">{track.name}</p>
+                    <p className="text-gray-500 text-xs truncate">{track.artist}</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="bg-dark-card border border-dark-border rounded-lg p-3 hover:bg-dark-bg transition-colors group">

@@ -90,7 +90,8 @@ class RecommendationService {
 
         // AUTO-DETECT: tentar buscar como música
         try {
-            const trackResults = await lastfmService.searchTrack(prompt, 3);
+            const trackSearch = await lastfmService.searchTrack(prompt, 3);
+            const trackResults = trackSearch.tracks || trackSearch;
             if (trackResults.length > 0) {
                 const topTrack = trackResults[0];
                 const listeners = parseInt(topTrack.listeners || 0);
@@ -288,7 +289,8 @@ class RecommendationService {
 
     async getRecommendationsByTrackSearch(trackQuery, limit) {
         try {
-            const searchResults = await lastfmService.searchTrack(trackQuery, 5);
+            const searchData = await lastfmService.searchTrack(trackQuery, 5);
+            const searchResults = searchData.tracks || searchData;
             if (searchResults.length === 0) {
                 return this.getRecommendationsByArtist(trackQuery, limit);
             }

@@ -4,12 +4,14 @@ import useAuthStore from '../stores/authStore';
 
 export default function Login() {
     const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
     const navigate = useNavigate();
     const loginLocal = useAuthStore(state => state.loginLocal);
     const loginSpotify = useAuthStore(state => state.loginSpotify);
 
-    const handleLocalLogin = (e) => {
+    const handleLocalLogin = async (e) => {
         e.preventDefault();
         setError('');
 
@@ -18,11 +20,18 @@ export default function Login() {
             return;
         }
 
-        const success = loginLocal(email);
-        if (success) {
-            navigate('/dashboard');
-        } else {
-            setError('Conta não encontrada. Por favor, crie uma conta primeiro.');
+        setIsLoading(true);
+        try {
+            const success = await loginLocal(email, password);
+            if (success) {
+                navigate('/dashboard');
+            } else {
+                setError('Conta não encontrada ou credenciais inválidas.');
+            }
+        } catch (err) {
+            setError(err.message || 'Erro ao fazer login. Tente novamente.');
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -55,6 +64,22 @@ export default function Login() {
                                 onChange={(e) => setEmail(e.target.value)}
                                 className="w-full px-4 py-3 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-dark-text-muted focus:outline-none focus:ring-2 focus:ring-accent-blue focus:border-transparent transition-all"
                                 placeholder="seu@email.com"
+                                disabled={isLoading}
+                            />
+                        </div>
+
+                        <div>
+                            <label htmlFor="password" className="block text-sm font-medium text-dark-text mb-2">
+                                Senha (opcional)
+                            </label>
+                            <input
+                                id="password"
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full px-4 py-3 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-dark-text-muted focus:outline-none focus:ring-2 focus:ring-accent-blue focus:border-transparent transition-all"
+                                placeholder="Sua senha"
+                                disabled={isLoading}
                             />
                         </div>
 
@@ -64,8 +89,8 @@ export default function Login() {
                             </div>
                         )}
 
-                        <button type="submit" className="w-full btn-primary">
-                            Entrar
+                        <button type="submit" className="w-full btn-primary" disabled={isLoading}>
+                            {isLoading ? 'Entrando...' : 'Entrar'}
                         </button>
                     </form>
 

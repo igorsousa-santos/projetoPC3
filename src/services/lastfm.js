@@ -115,22 +115,121 @@ class LastFMService {
         return data.topartists?.artist || [];
     }
 
-    // Search for artist
-    async searchArtist(artistName, limit = 10) {
-        const data = await this.apiRequest('artist.search', {
-            artist: artistName,
-            limit
+    // Get user's top tracks
+    async getTopTracks(user, limit = 20, period = 'overall') {
+        const data = await this.apiRequest('user.gettoptracks', {
+            user,
+            limit,
+            period
         });
-        return data.results?.artistmatches?.artist || [];
+        return data.toptracks?.track || [];
     }
 
-    // Search for track
-    async searchTrack(trackName, limit = 10) {
+    // Get user's top albums
+    async getTopAlbums(user, limit = 20, period = 'overall') {
+        const data = await this.apiRequest('user.gettopalbums', {
+            user,
+            limit,
+            period
+        });
+        return data.topalbums?.album || [];
+    }
+
+    // Get user info (includes total playcount, registered date, etc)
+    async getUserInfo(user) {
+        const data = await this.apiRequest('user.getinfo', {
+            user
+        });
+        return data.user || null;
+    }
+
+    // Get user's weekly chart list (available weeks)
+    async getWeeklyChartList(user) {
+        const data = await this.apiRequest('user.getweeklychartlist', {
+            user
+        });
+        return data.weeklychartlist?.chart || [];
+    }
+
+    // Get user's weekly artist chart for a specific week
+    async getWeeklyArtistChart(user, from, to) {
+        const data = await this.apiRequest('user.getweeklyartistchart', {
+            user,
+            from,
+            to
+        });
+        return data.weeklyartistchart?.artist || [];
+    }
+
+    // Get user's weekly album chart for a specific week
+    async getWeeklyAlbumChart(user, from, to) {
+        const data = await this.apiRequest('user.getweeklyalbumchart', {
+            user,
+            from,
+            to
+        });
+        return data.weeklyalbumchart?.album || [];
+    }
+
+    // Get user's weekly track chart for a specific week
+    async getWeeklyTrackChart(user, from, to) {
+        const data = await this.apiRequest('user.getweeklytrackchart', {
+            user,
+            from,
+            to
+        });
+        return data.weeklytrackchart?.track || [];
+    }
+
+    // Search for artist with pagination
+    async searchArtist(artistName, limit = 10, page = 1) {
+        const data = await this.apiRequest('artist.search', {
+            artist: artistName,
+            limit,
+            page
+        });
+        return {
+            artists: data.results?.artistmatches?.artist || [],
+            totalResults: parseInt(data.results?.['opensearch:totalResults']) || 0,
+            page: parseInt(data.results?.['opensearch:Query']?.startPage) || page
+        };
+    }
+
+    // Search for track with pagination
+    async searchTrack(trackName, limit = 10, page = 1) {
         const data = await this.apiRequest('track.search', {
             track: trackName,
-            limit
+            limit,
+            page
         });
-        return data.results?.trackmatches?.track || [];
+        return {
+            tracks: data.results?.trackmatches?.track || [],
+            totalResults: parseInt(data.results?.['opensearch:totalResults']) || 0,
+            page: parseInt(data.results?.['opensearch:Query']?.startPage) || page
+        };
+    }
+
+    // Search for album with pagination
+    async searchAlbum(albumName, limit = 10, page = 1) {
+        const data = await this.apiRequest('album.search', {
+            album: albumName,
+            limit,
+            page
+        });
+        return {
+            albums: data.results?.albummatches?.album || [],
+            totalResults: parseInt(data.results?.['opensearch:totalResults']) || 0,
+            page: parseInt(data.results?.['opensearch:Query']?.startPage) || page
+        };
+    }
+
+    // Get album info
+    async getAlbumInfo(albumName, artistName) {
+        const data = await this.apiRequest('album.getinfo', {
+            album: albumName,
+            artist: artistName
+        });
+        return data.album || null;
     }
 
     // Get similar artists

@@ -174,11 +174,18 @@ class SpotifyService {
         localStorage.removeItem('spotify_code_verifier');
     }
 
+    // Check if Spotify is connected with a valid token
+    isConnected() {
+        return !!this.getToken();
+    }
+
     // --- API METHODS ---
 
     async apiRequest(endpoint, options = {}) {
         const token = this.getToken();
-        if (!token) throw new Error('No valid token');
+        if (!token) {
+            throw new Error('401: No valid Spotify token. Please reconnect your Spotify account.');
+        }
 
         const response = await fetch(`${SPOTIFY_API_BASE}${endpoint}`, {
             ...options,
@@ -192,9 +199,14 @@ class SpotifyService {
         if (!response.ok) {
             if (response.status === 401) {
                 this.logout();
-                // Optionally trigger re-auth
+                throw new Error('401: Session expired. Please reconnect your Spotify account.');
             }
-            throw new Error(`Spotify API Error: ${response.statusText}`);
+            if (response.status === 403) {
+                throw new Error('403: Access denied. Check if you have the required Spotify permissions.');
+            }
+            const errorText = await response.text();
+            console.error('Spotify API Error:', response.status, errorText);
+            throw new Error(`${response.status}: ${response.statusText}`);
         }
 
         // Handle empty responses (like from DELETE)
@@ -220,6 +232,68 @@ class SpotifyService {
     async searchArtist(artistName) {
         const data = await this.apiRequest(`/search?q=${encodeURIComponent(artistName)}&type=artist&limit=1`);
         return data.artists?.items?.[0] || null;
+    }
+
+    // Full search methods with pagination
+    async searchArtists(query, limit = 10, offset = 0) {
+        const data = await this.apiRequest(`/search?q=${encodeURIComponent(query)}&type=artist&limit=${limit}&offset=${offset}`);
+        return {
+            artists: data.artists?.items || [],
+            total: data.artists?.total || 0,
+            offset: data.artists?.offset || 0,
+            limit: data.artists?.limit || limit
+        };
+    }
+
+    async searchTracks(query, limit = 10, offset = 0) {
+        const data = await this.apiRequest(`/search?q=${encodeURIComponent(query)}&type=track&limit=${limit}&offset=${offset}`);
+        return {
+            tracks: data.tracks?.items || [],
+            total: data.tracks?.total || 0,
+            offset: data.tracks?.offset || 0,
+            limit: data.tracks?.limit || limit
+        };
+    }
+
+    async searchAlbums(query, limit = 10, offset = 0) {
+        const data = await this.apiRequest(`/search?q=${encodeURIComponent(query)}&type=album&limit=${limit}&offset=${offset}`);
+        return {
+            albums: data.albums?.items || [],
+            total: data.albums?.total || 0,
+            offset: data.albums?.offset || 0,
+            limit: data.albums?.limit || limit
+        };
+    }
+
+    async searchAll(query, limit = 10, offset = 0) {
+        const data = await this.apiRequest(`/search?q=${encodeURIComponent(query)}&type=artist,track,album&limit=${limit}&offset=${offset}`);
+        return {
+            artists: {
+                items: data.artists?.items || [],
+                total: data.artists?.total || 0
+            },
+            tracks: {
+                items: data.tracks?.items || [],
+                total: data.tracks?.total || 0
+            },
+            albums: {
+                items: data.albums?.items || [],
+                total: data.albums?.total || 0
+            }
+        };
+    }
+
+    async getArtistTopTracks(artistId, market = 'BR') {
+        const data = await this.apiRequest(`/artists/${artistId}/top-tracks?market=${market}`);
+        return data.tracks || [];
+    }
+
+    async getArtist(artistId) {
+        return this.apiRequest(`/artists/${artistId}`);
+    }
+
+    async getAlbum(albumId) {
+        return this.apiRequest(`/albums/${albumId}`);
     }
 
     async getTrack(trackId) {

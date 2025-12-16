@@ -8,6 +8,7 @@ function Sidebar() {
         { to: '/dashboard', icon: 'ph-house', label: 'Início' },
         { to: '/search', icon: 'ph-magnifying-glass', label: 'Buscar' },
         { to: '/for-you', icon: 'ph-sparkle', label: 'Para Você' },
+        { to: '/generate', icon: 'ph-magic-wand', label: 'Gerar Playlist' },
         { to: '/playlists', icon: 'ph-music-notes', label: 'Playlists' },
         { to: '/profile', icon: 'ph-user', label: 'Perfil' }
     ];
