@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import spotifyService from '../services/spotify';
+import lastfmService from '../services/lastfm';
+import useAuthStore from './authStore';
 
 const useListeningHistoryStore = create(
     persist(
@@ -13,6 +15,60 @@ const useListeningHistoryStore = create(
                 topGenres: new Map(), // genre -> play count (will need to fetch from API)
                 totalListeningTime: 0, // in seconds
                 uniqueTracks: new Set(),
+            },
+
+            // Sync History (Prioritize Last.fm)
+            syncHistory: async () => {
+                const { user, isAuthenticated } = useAuthStore.getState();
+                
+                if (isAuthenticated && user?.lastfmUsername) {
+                    return get().syncWithLastFM(user.lastfmUsername);
+                } else {
+                    return get().syncWithSpotify();
+                }
+            },
+
+            // Sync with Last.fm Recent Tracks
+            syncWithLastFM: async (username) => {
+                if (!username) return;
+                
+                try {
+                    const recent = await lastfmService.getRecentTracks(username, 50);
+                    const currentPlays = get().plays;
+                    const newPlays = [];
+
+                    for (const item of recent) {
+                        // Skip "now playing" track which has no date (or handle it differently)
+                        if (item['@attr']?.nowplaying) continue;
+
+                        const playTime = parseInt(item.date.uts) * 1000;
+                        
+                        // Check if we already have this play (timestamp match)
+                        const exists = currentPlays.some(p => Math.abs(new Date(p.timestamp).getTime() - playTime) < 1000);
+
+                        if (!exists) {
+                            newPlays.push({
+                                track: {
+                                    id: item.mbid || `${item.name}-${item.artist['#text']}`, // Fallback ID
+                                    name: item.name,
+                                    artist: item.artist['#text'],
+                                    album: item.album['#text'],
+                                    image: item.image[2]['#text'], // Medium/Large image
+                                },
+                                timestamp: new Date(playTime).toISOString(),
+                                duration: 0 // Last.fm doesn't always give duration in recent tracks
+                            });
+                        }
+                    }
+
+                    if (newPlays.length > 0) {
+                        get().mergePlays(newPlays);
+                        console.log(`[History] Synced ${newPlays.length} new plays from Last.fm.`);
+                    }
+
+                } catch (e) {
+                    console.error('Error syncing history with Last.fm:', e);
+                }
             },
 
             // Sync with Spotify Recently Played
@@ -29,7 +85,6 @@ const useListeningHistoryStore = create(
                         const playTime = new Date(item.played_at).getTime();
                         
                         // Check if we already have this play (timestamp match)
-                        // Simple check: playTime
                         const exists = currentPlays.some(p => Math.abs(new Date(p.timestamp).getTime() - playTime) < 1000); // 1s tolerance
 
                         if (!exists) {
@@ -48,38 +103,42 @@ const useListeningHistoryStore = create(
                     }
 
                     if (newPlays.length > 0) {
-                        // Merge and Sort
-                        const merged = [...newPlays, ...currentPlays]
-                            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-                            .slice(0, 100);
-
-                        // Recalculate Stats (Simplified: Just rebuild from merged plays)
-                        const topArtists = new Map();
-                        const uniqueTracks = new Set();
-                        let totalTime = 0;
-
-                        merged.forEach(play => {
-                            const artist = play.track.artist;
-                            topArtists.set(artist, (topArtists.get(artist) || 0) + 1);
-                            uniqueTracks.add(play.track.id);
-                            totalTime += (play.duration || 0);
-                        });
-
-                        set({
-                            plays: merged,
-                            stats: {
-                                ...get().stats,
-                                topArtists,
-                                totalListeningTime: totalTime,
-                                uniqueTracks,
-                            }
-                        });
-                        
+                        get().mergePlays(newPlays);
                         console.log(`[History] Synced ${newPlays.length} new plays from Spotify.`);
                     }
                 } catch (e) {
                     console.error('Error syncing history with Spotify:', e);
                 }
+            },
+
+            // Helper to merge and sort plays
+            mergePlays: (newPlays) => {
+                const currentPlays = get().plays;
+                const merged = [...newPlays, ...currentPlays]
+                    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+                    .slice(0, 100);
+
+                // Recalculate Stats
+                const topArtists = new Map();
+                const uniqueTracks = new Set();
+                let totalTime = 0;
+
+                merged.forEach(play => {
+                    const artist = play.track.artist;
+                    topArtists.set(artist, (topArtists.get(artist) || 0) + 1);
+                    uniqueTracks.add(play.track.id);
+                    totalTime += (play.duration || 0);
+                });
+
+                set({
+                    plays: merged,
+                    stats: {
+                        ...get().stats,
+                        topArtists,
+                        totalListeningTime: totalTime,
+                        uniqueTracks,
+                    }
+                });
             },
 
             // Track a play event

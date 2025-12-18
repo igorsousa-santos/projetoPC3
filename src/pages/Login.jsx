@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import useAuthStore from '../stores/authStore';
 
 export default function Login() {
-    const loginSpotify = useAuthStore(state => state.loginSpotify);
+    const login = useAuthStore(state => state.login);
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-dark-bg via-dark-card to-dark-bg p-4">
@@ -21,17 +21,23 @@ export default function Login() {
                     <h2 className="text-2xl font-bold text-white mb-6 text-center">Entrar</h2>
 
                     <p className="text-center text-dark-text-muted mb-8">
-                        Conecte-se com sua conta Spotify para começar a descobrir e criar playlists.
+                        Conecte-se com sua conta Last.fm para começar a explorar seu universo musical.
                     </p>
 
-                    {/* Spotify Login */}
+                    {/* Last.fm Login */}
                     <button
-                        onClick={loginSpotify}
-                        className="w-full bg-green-500 hover:bg-green-400 text-white font-bold py-4 px-6 rounded-full transition-all transform hover:scale-105 flex items-center justify-center space-x-3 shadow-lg hover:shadow-green-500/20"
+                        onClick={login}
+                        className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-4 px-6 rounded-full transition-all transform hover:scale-105 flex items-center justify-center space-x-3 shadow-lg hover:shadow-red-600/20"
                     >
-                        <i className="ph-fill ph-spotify-logo text-3xl"></i>
-                        <span className="text-lg">Continuar com Spotify</span>
+                        <i className="ph-fill ph-music-notes text-3xl"></i>
+                        <span className="text-lg">Continuar com Last.fm</span>
                     </button>
+                    
+                    <div className="mt-6 text-center">
+                         <p className="text-xs text-dark-text-muted">
+                            Você poderá conectar seu Spotify para reprodução após o login.
+                        </p>
+                    </div>
                 </div>
 
                 {/* Terms */}

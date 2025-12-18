@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import { GoogleGenAI } from "@google/genai";
 import lastfmRoutes from './routes/lastfm.js';
+import { md5 } from './utils/crypto.js';
 
 dotenv.config();
 
@@ -12,6 +13,9 @@ const app = express();
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key-123';
+const LASTFM_API_KEY = process.env.VITE_LASTFM_API_KEY;
+const LASTFM_SHARED_SECRET = process.env.VITE_LASTFM_SHARED_SECRET || '';
+const LASTFM_API_BASE = 'https://ws.audioscrobbler.com/2.0/';
 
 // AI Setup
 const genAI = process.env.VITE_GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.VITE_GEMINI_API_KEY }) : null;
@@ -33,6 +37,20 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+const signParams = (params) => {
+    const keys = Object.keys(params).sort();
+    let stringToSign = '';
+
+    keys.forEach(key => {
+        if (key !== 'format' && key !== 'callback') {
+            stringToSign += key + params[key];
+        }
+    });
+
+    stringToSign += LASTFM_SHARED_SECRET;
+    return md5(stringToSign);
+};
+
 // --- Routes ---
 
 app.use('/api/lastfm', lastfmRoutes);
@@ -42,8 +60,91 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'Backend is running' });
 });
 
-// Auth: Spotify Login
-app.post('/api/auth/spotify', async (req, res) => {
+// Auth: Last.fm Login (Primary)
+app.post('/api/auth/lastfm-login', async (req, res) => {
+    try {
+        const { token } = req.body;
+
+        if (!token) {
+            return res.status(400).json({ message: 'Token is required' });
+        }
+
+        // 1. Exchange token for session with Last.fm
+        const params = {
+            api_key: LASTFM_API_KEY,
+            method: 'auth.getSession',
+            token: token
+        };
+
+        const api_sig = signParams(params);
+        
+        const url = new URL(LASTFM_API_BASE);
+        Object.entries({ ...params, api_sig, format: 'json' }).forEach(([key, value]) => {
+            url.searchParams.append(key, value);
+        });
+
+        const response = await fetch(url.toString());
+        const data = await response.json();
+
+        if (data.error || !data.session) {
+            console.error('Last.fm Session Error:', data);
+            return res.status(401).json({ message: 'Failed to authenticate with Last.fm' });
+        }
+
+        const { name: username, key: sessionKey } = data.session;
+        
+        // Note: auth.getSession doesn't return image usually. We can fetch it later or leave null.
+        const image = data.session.image; 
+
+        // 2. Find or Create User
+        let user = await prisma.user.findUnique({
+            where: { lastfmUsername: username }
+        });
+
+        if (!user) {
+            // Check if user exists by email (unlikely with just Last.fm, but good practice) or spotifyId if we had it
+            // For now, simple creation
+            user = await prisma.user.create({
+                data: {
+                    lastfmUsername: username,
+                    name: username, // Default to username
+                    image: image && Array.isArray(image) ? image[image.length - 1]['#text'] : null 
+                }
+            });
+        } else {
+             // Update session? currently not storing session key in DB, maybe we should?
+             // For now, just logging them in.
+        }
+
+        // 3. Issue App JWT
+        const jwtToken = jwt.sign(
+            { id: user.id, lastfmUsername: user.lastfmUsername, spotifyId: user.spotifyId },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        // Return user info and the Last.fm session key (so frontend can still use it for scrobbling if needed directly, though ideally backend proxies it)
+        // We'll return the session key so the frontend can store it in localStorage as before for legacy compatibility/hybrid approach
+        res.json({ 
+            user: { 
+                id: user.id, 
+                name: user.name, 
+                lastfmUsername: user.lastfmUsername,
+                spotifyId: user.spotifyId,
+                image: user.image 
+            }, 
+            token: jwtToken,
+            lastfmSessionKey: sessionKey 
+        });
+
+    } catch (error) {
+        console.error('Last.fm Auth Error:', error);
+        res.status(500).json({ message: 'Error during authentication' });
+    }
+});
+
+// Link Spotify Account (Authenticated Users Only)
+app.post('/api/auth/spotify', authenticateToken, async (req, res) => {
     try {
         const { accessToken } = req.body;
         
@@ -62,53 +163,39 @@ app.post('/api/auth/spotify', async (req, res) => {
 
         const spotifyUser = await spotifyResponse.json();
         
-        // 2. Find or Create User
-        let user = await prisma.user.findUnique({
+        // 2. Check if this Spotify ID is already used by another user
+        const existingUser = await prisma.user.findUnique({
             where: { spotifyId: spotifyUser.id }
         });
 
-        if (!user) {
-            user = await prisma.user.create({
-                data: {
-                    spotifyId: spotifyUser.id,
-                    name: spotifyUser.display_name || 'Spotify User',
-                    email: spotifyUser.email || `no-email-${spotifyUser.id}@spotify.com`,
-                    image: spotifyUser.images?.[0]?.url || null
-                }
-            });
-        } else {
-            // Update profile info if changed
-            user = await prisma.user.update({
-                where: { id: user.id },
-                data: {
-                    name: spotifyUser.display_name || user.name,
-                    image: spotifyUser.images?.[0]?.url || user.image,
-                    email: spotifyUser.email || user.email
-                }
-            });
+        if (existingUser && existingUser.id !== req.user.id) {
+            return res.status(409).json({ message: 'This Spotify account is already connected to another user.' });
         }
 
-        // 3. Issue App JWT
-        const token = jwt.sign(
-            { id: user.id, spotifyId: user.spotifyId },
-            JWT_SECRET,
-            { expiresIn: '7d' } // Longer session for app
-        );
+        // 3. Update Current User
+        const updatedUser = await prisma.user.update({
+            where: { id: req.user.id },
+            data: {
+                spotifyId: spotifyUser.id,
+                // We don't overwrite name/image from Spotify anymore, Last.fm is source of truth or user preference
+            }
+        });
 
         res.json({ 
+            success: true,
             user: { 
-                id: user.id, 
-                name: user.name, 
-                email: user.email, 
-                image: user.image,
-                spotifyId: user.spotifyId 
-            }, 
-            token 
+                id: updatedUser.id, 
+                name: updatedUser.name, 
+                email: updatedUser.email, 
+                image: updatedUser.image,
+                lastfmUsername: updatedUser.lastfmUsername,
+                spotifyId: updatedUser.spotifyId 
+            }
         });
 
     } catch (error) {
-        console.error('Spotify Auth Error:', error);
-        res.status(500).json({ message: 'Error during authentication' });
+        console.error('Spotify Link Error:', error);
+        res.status(500).json({ message: 'Error linking Spotify account' });
     }
 });
 

@@ -9,10 +9,10 @@ const useAuthStore = create((set, get) => ({
 
     // Auth state
     token: null,
-    user: null,
+    user: null, // Backend user object (sourced from Last.fm mainly)
     isAuthenticated: false,
     isLoading: true,
-    authType: null, // 'local' | 'spotify' | null
+    authType: null, // 'lastfm' | 'spotify' (legacy)
     spotifyConnected: false,
     spotifyUserId: null,
 
@@ -29,25 +29,30 @@ const useAuthStore = create((set, get) => ({
 
         if (authToken) {
             try {
-                // Verificar se o token ainda é válido buscando o usuário atual
+                // Verify token and get current user from backend
                 const response = await userAPI.getCurrentUser();
                 if (response.success && response.data) {
+                    const user = response.data;
+                    
                     set({
-                        user: response.data,
+                        user: user,
                         isAuthenticated: true,
-                        authType: 'local',
+                        authType: 'lastfm', // Assuming Last.fm based since it's the new standard
                         isLoading: false,
-                        spotifyUserId: storedSpotifyUserId,
-                        lastfmSessionKey: storedLastFmSession,
-                        lastfmUser: storedLastFmUser ? JSON.parse(storedLastFmUser) : null
+                        spotifyUserId: user.spotifyId || storedSpotifyUserId,
+                        lastfmSessionKey: storedLastFmSession, // Keep local session for direct calls if needed
+                        lastfmUser: user.lastfmUsername || (storedLastFmUser ? JSON.parse(storedLastFmUser) : null)
                     });
 
                     // Check if Spotify is also connected
                     const spotifyToken = spotifyService.getToken();
                     if (spotifyToken) {
                         set({ token: spotifyToken, spotifyConnected: true });
-                        get().fetchSpotifyUser();
                     }
+                    
+                    // Sync History
+                    useListeningHistoryStore.getState().syncHistory();
+
                     return;
                 } else {
                     // Token expired or invalid
@@ -59,44 +64,48 @@ const useAuthStore = create((set, get) => ({
             }
         }
 
-        // Check for Spotify only auth (legacy)
-        const spotifyToken = spotifyService.getToken();
-        if (spotifyToken) {
-            set({
-                token: spotifyToken,
-                isAuthenticated: true,
-                authType: 'spotify',
-                spotifyConnected: true,
-                spotifyUserId: storedSpotifyUserId,
-                lastfmSessionKey: storedLastFmSession,
-                lastfmUser: storedLastFmUser ? JSON.parse(storedLastFmUser) : null
-            });
-            get().fetchSpotifyUser();
-        } else {
-            set({ isLoading: false });
-        }
+        set({ isLoading: false });
     },
 
-    // Last.fm Login
+    // Last.fm Login (Primary)
     loginLastFM: () => {
         const apiKey = import.meta.env.VITE_LASTFM_API_KEY;
         const callbackUrl = `${window.location.origin}/lastfm/callback`;
         window.location.href = `http://www.last.fm/api/auth/?api_key=${apiKey}&cb=${encodeURIComponent(callbackUrl)}`;
     },
+    
+    // Alias for main login
+    login: () => {
+        get().loginLastFM();
+    },
 
     // Handle Last.fm Callback
     handleLastFMCallback: async (token) => {
         try {
-            const session = await lastfmService.getSession(token);
-            if (session) {
-                localStorage.setItem('lastfm_session_key', session.key);
-                localStorage.setItem('lastfm_user', JSON.stringify(session.name));
+            // 1. Authenticate with Backend (which also validates with Last.fm)
+            const response = await userAPI.loginLastFM(token);
+            
+            if (response.success && response.data) {
+                const { user, token: jwtToken, lastfmSessionKey } = response.data;
+
+                localStorage.setItem('lastfm_session_key', lastfmSessionKey);
+                localStorage.setItem('lastfm_user', JSON.stringify(user.lastfmUsername));
+                // auth_token is already set by userAPI.loginLastFM
 
                 set({
-                    lastfmSessionKey: session.key,
-                    lastfmUser: session.name
+                    user: user,
+                    isAuthenticated: true,
+                    authType: 'lastfm',
+                    lastfmSessionKey: lastfmSessionKey,
+                    lastfmUser: user.lastfmUsername,
+                    spotifyUserId: user.spotifyId
                 });
+
+                useListeningHistoryStore.getState().syncHistory();
+
                 return { success: true };
+            } else {
+                throw new Error(response.message || 'Falha no login com Last.fm');
             }
         } catch (error) {
             console.error('Last.fm auth error:', error);
@@ -104,23 +113,18 @@ const useAuthStore = create((set, get) => ({
         }
     },
 
-    // Disconnect Last.fm
+    // Disconnect Last.fm (Logout)
     disconnectLastFM: () => {
-        localStorage.removeItem('lastfm_session_key');
-        localStorage.removeItem('lastfm_user');
-        set({
-            lastfmSessionKey: null,
-            lastfmUser: null
-        });
+        get().logout();
     },
 
-    // Spotify login
+    // Spotify login (Secondary / Link Account)
     loginSpotify: async () => {
         const authUrl = await spotifyService.getAuthUrl();
         window.location.href = authUrl;
     },
 
-    // Connect Spotify to existing local account
+    // Connect Spotify to existing account
     connectSpotify: () => {
         get().loginSpotify();
     },
@@ -134,62 +138,77 @@ const useAuthStore = create((set, get) => ({
             spotifyConnected: false,
             spotifyUserId: null
         });
+        // TODO: Update backend to remove spotifyId from user?
     },
 
-    // Handle Spotify callback
+    // Handle Spotify callback (Linking only)
     handleCallback: async () => {
         console.log('[AuthStore] Handling Spotify callback...');
         const spotifyToken = await spotifyService.handleCallback();
 
-        if (spotifyToken) {
-            console.log('[AuthStore] Spotify Token received. Authenticating with Backend...');
-            
-            try {
-                // Exchange Spotify Token for App Session
-                const response = await userAPI.verifySpotifyToken(spotifyToken);
-                
-                if (response.success && response.data) {
-                    const { user, token } = response.data;
-                    
-                    set({
-                        token: spotifyToken, // Keep spotify token for playback
-                        user: user,          // Backend user data
-                        isAuthenticated: true,
-                        authType: 'spotify',
-                        spotifyConnected: true,
-                        spotifyUserId: user.spotifyId,
-                        isLoading: false
-                    });
-
-                    localStorage.setItem('spotify_user_id', user.spotifyId);
-                    useGamificationStore.getState().trackSpotifyConnected();
-                    useListeningHistoryStore.getState().syncWithSpotify();
-                    
-                    return { success: true, message: 'Login realizado com sucesso!' };
-                } else {
-                    throw new Error(response.message || 'Falha na autenticação com o servidor');
-                }
-            } catch (error) {
-                console.error('[AuthStore] Backend auth failed:', error);
-                return { 
-                    success: false, 
-                    error: 'backend_error',
-                    message: 'Erro ao conectar com o servidor. Tente novamente.' 
-                };
-            }
+        if (!spotifyToken) {
+            return {
+                success: false,
+                error: 'token_missing',
+                message: 'Não foi possível obter o token do Spotify.'
+            };
         }
 
-        console.error('[AuthStore] Failed to get token from callback URL');
-        return {
-            success: false,
-            error: 'token_missing',
-            message: 'Não foi possível obter o token de autenticação.'
-        };
+        console.log('[AuthStore] Spotify Token received.');
+
+        // Verify if user is logged in
+        if (!get().isAuthenticated) {
+            // Can't link if not logged in
+            // Store token for playback? Maybe, but better to enforce login.
+            // Actually, we can just keep the token locally for playback if they want, 
+            // but we should warn them they aren't "logged in".
+            // But since the request is to "remove old login code", we strictly treat this as a link action or playback auth.
+            
+            // Let's set the token just so the Player works if they happen to land here, 
+            // but return a message saying "Please login".
+            
+            set({ token: spotifyToken, spotifyConnected: true });
+            return { 
+                success: false, 
+                message: 'Para vincular sua conta, faça login com Last.fm primeiro. O Spotify foi conectado apenas para reprodução.' 
+            };
+        }
+
+        // User is authenticated, try to link account
+        try {
+            const response = await userAPI.verifySpotifyToken(spotifyToken);
+            
+            if (response.success) {
+                const updatedUser = response.data.user; // Backend now returns { success, user }
+
+                // Update local user state
+                const currentUser = get().user;
+                set({
+                    token: spotifyToken,
+                    spotifyConnected: true,
+                    spotifyUserId: updatedUser.spotifyId,
+                    user: { ...currentUser, spotifyId: updatedUser.spotifyId }
+                });
+                
+                localStorage.setItem('spotify_user_id', updatedUser.spotifyId);
+                useListeningHistoryStore.getState().syncHistory();
+                
+                return { success: true, message: 'Spotify vinculado com sucesso!' };
+            } else {
+                // If linking failed (e.g. already used), we still keep the token for playback session
+                set({ token: spotifyToken, spotifyConnected: true });
+                return { success: false, message: response.message || 'Erro ao vincular conta.' };
+            }
+
+        } catch (error) {
+            console.error('Error linking Spotify:', error);
+            set({ token: spotifyToken, spotifyConnected: true });
+            return { success: false, message: 'Erro ao conectar com o servidor.' };
+        }
     },
 
-    // Fetch Spotify user profile (Legacy/Optional now since backend handles it)
+    // Fetch Spotify user profile
     fetchSpotifyUser: async () => {
-        // Keeps local store in sync if needed, but primary source is now backend user
         try {
             const spotifyUser = await spotifyService.getUserProfile();
             set({ spotifyUserId: spotifyUser.id });
@@ -198,7 +217,7 @@ const useAuthStore = create((set, get) => ({
         }
     },
 
-    // Update user profile - INTEGRADO COM BACKEND
+    // Update user profile
     updateUser: async (updates) => {
         try {
             const user = get().user;

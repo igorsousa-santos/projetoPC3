@@ -40,6 +40,16 @@ export const userAPI = {
 
     verifySpotifyToken: async (accessToken) => {
         const res = await handleResponse(api.post('/auth/spotify', { accessToken }));
+        // Legacy/Secondary Spotify Auth: If used for primary login, it sets token. 
+        // If used for linking (TODO), it might just return success.
+        if (res.success && res.data.token) {
+            localStorage.setItem('auth_token', res.data.token);
+        }
+        return res;
+    },
+
+    loginLastFM: async (token) => {
+        const res = await handleResponse(api.post('/auth/lastfm-login', { token }));
         if (res.success && res.data.token) {
             localStorage.setItem('auth_token', res.data.token);
         }
