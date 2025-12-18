@@ -229,6 +229,32 @@ class SpotifyService {
         return this.apiRequest('/me');
     }
 
+    async getTopArtists(limit = 20, time_range = 'medium_term') {
+        // time_range: short_term (4 weeks), medium_term (6 months), long_term (years)
+        const data = await this.apiRequest(`/me/top/artists?limit=${limit}&time_range=${time_range}`);
+        return data.items || [];
+    }
+
+    async getTopTracks(limit = 20, time_range = 'medium_term') {
+        const data = await this.apiRequest(`/me/top/tracks?limit=${limit}&time_range=${time_range}`);
+        return data.items || [];
+    }
+
+    async getRecentlyPlayed(limit = 20) {
+        const data = await this.apiRequest(`/me/player/recently-played?limit=${limit}`);
+        return data.items || [];
+    }
+
+    async getRecommendations(seedArtists = [], seedTracks = [], seedGenres = [], limit = 20) {
+        const params = new URLSearchParams({ limit });
+        if (seedArtists.length) params.append('seed_artists', seedArtists.slice(0, 5).join(','));
+        if (seedTracks.length) params.append('seed_tracks', seedTracks.slice(0, 5).join(','));
+        if (seedGenres.length) params.append('seed_genres', seedGenres.slice(0, 5).join(','));
+
+        const data = await this.apiRequest(`/recommendations?${params.toString()}`);
+        return data.tracks || [];
+    }
+
     async searchTrack(trackName, artistName) {
         const query = `track:${trackName} artist:${artistName}`;
         const data = await this.apiRequest(`/search?q=${encodeURIComponent(query)}&type=track&limit=1`);

@@ -2,9 +2,11 @@ import { create } from 'zustand';
 import spotifyService from '../services/spotify';
 import lastfmService from '../services/lastfm';
 import { userAPI } from '../services/api';
-import useGamificationStore from './gamificationStore';
+import useListeningHistoryStore from './listeningHistoryStore';
 
 const useAuthStore = create((set, get) => ({
+    // ... (rest of store)
+
     // Auth state
     token: null,
     user: null,
@@ -161,6 +163,7 @@ const useAuthStore = create((set, get) => ({
 
                     localStorage.setItem('spotify_user_id', user.spotifyId);
                     useGamificationStore.getState().trackSpotifyConnected();
+                    useListeningHistoryStore.getState().syncWithSpotify();
                     
                     return { success: true, message: 'Login realizado com sucesso!' };
                 } else {

@@ -19,8 +19,6 @@ const genAI = process.env.VITE_GEMINI_API_KEY ? new GoogleGenAI({ apiKey: proces
 app.use(cors());
 app.use(express.json());
 
-// --- Middleware ---
-// ... (rest of middleware)
 
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -39,7 +37,6 @@ const authenticateToken = (req, res, next) => {
 
 app.use('/api/lastfm', lastfmRoutes);
 
-// ... (keep all other routes: health, auth, playlists...)
 // Health Check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'Backend is running' });

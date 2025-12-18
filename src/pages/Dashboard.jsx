@@ -36,14 +36,14 @@ function Dashboard() {
                             <i className="ph-fill ph-music-notes text-5xl text-blue-400 mb-4"></i>
                             <h3 className="text-xl font-bold text-white mb-2">Recomendações Inteligentes</h3>
                             <p className="text-gray-400">
-                                Descubra novas músicas baseadas em Last.fm
+                                Descubra novas músicas baseadas no seu gosto
                             </p>
                         </div>
                         <div className="bg-gray-800 p-6 rounded-lg text-center">
-                            <i className="ph-fill ph-play text-5xl text-green-400 mb-4"></i>
-                            <h3 className="text-xl font-bold text-white mb-2">Reprodução Integrada</h3>
+                            <i className="ph-fill ph-spotify-logo text-5xl text-green-400 mb-4"></i>
+                            <h3 className="text-xl font-bold text-white mb-2">Integração Spotify</h3>
                             <p className="text-gray-400">
-                                Ouça as músicas diretamente no navegador
+                                Conecte sua conta para recomendações personalizadas
                             </p>
                         </div>
                         <div className="bg-gray-800 p-6 rounded-lg text-center">

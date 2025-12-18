@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import spotifyService from '../services/spotify';
+
 const useListeningHistoryStore = create(
     persist(
         (set, get) => ({
@@ -11,6 +13,73 @@ const useListeningHistoryStore = create(
                 topGenres: new Map(), // genre -> play count (will need to fetch from API)
                 totalListeningTime: 0, // in seconds
                 uniqueTracks: new Set(),
+            },
+
+            // Sync with Spotify Recently Played
+            syncWithSpotify: async () => {
+                if (!spotifyService.isConnected()) return;
+
+                try {
+                    const recent = await spotifyService.getRecentlyPlayed(50);
+                    const currentPlays = get().plays;
+                    const newPlays = [];
+
+                    // Spotify returns { track, played_at, context }
+                    for (const item of recent) {
+                        const playTime = new Date(item.played_at).getTime();
+                        
+                        // Check if we already have this play (timestamp match)
+                        // Simple check: playTime
+                        const exists = currentPlays.some(p => Math.abs(new Date(p.timestamp).getTime() - playTime) < 1000); // 1s tolerance
+
+                        if (!exists) {
+                            newPlays.push({
+                                track: {
+                                    id: item.track.id,
+                                    name: item.track.name,
+                                    artist: item.track.artists[0].name,
+                                    album: item.track.album.name,
+                                    image: item.track.album.images[0]?.url,
+                                },
+                                timestamp: item.played_at,
+                                duration: item.track.duration_ms / 1000
+                            });
+                        }
+                    }
+
+                    if (newPlays.length > 0) {
+                        // Merge and Sort
+                        const merged = [...newPlays, ...currentPlays]
+                            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+                            .slice(0, 100);
+
+                        // Recalculate Stats (Simplified: Just rebuild from merged plays)
+                        const topArtists = new Map();
+                        const uniqueTracks = new Set();
+                        let totalTime = 0;
+
+                        merged.forEach(play => {
+                            const artist = play.track.artist;
+                            topArtists.set(artist, (topArtists.get(artist) || 0) + 1);
+                            uniqueTracks.add(play.track.id);
+                            totalTime += (play.duration || 0);
+                        });
+
+                        set({
+                            plays: merged,
+                            stats: {
+                                ...get().stats,
+                                topArtists,
+                                totalListeningTime: totalTime,
+                                uniqueTracks,
+                            }
+                        });
+                        
+                        console.log(`[History] Synced ${newPlays.length} new plays from Spotify.`);
+                    }
+                } catch (e) {
+                    console.error('Error syncing history with Spotify:', e);
+                }
             },
 
             // Track a play event

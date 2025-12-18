@@ -25,29 +25,44 @@ class RecommendationService {
             const authStore = useAuthStore.getState();
             const lastfmUser = authStore.lastfmUser;
 
-            // 1. Three Recent Songs (from local history store)
-            const recent = historyStore.getRecentTracks(3);
-            context.recentSongs = recent.map(t => `${t.name} by ${t.artist}`);
+            // 1. Three Recent Songs (Prioritize Spotify Recently Played)
+            try {
+                if (spotifyService.isConnected()) {
+                    const recentSpotify = await spotifyService.getRecentlyPlayed(3);
+                    context.recentSongs = recentSpotify.map(item => `${item.track.name} by ${item.track.artists[0].name}`);
+                } else {
+                    const recent = historyStore.getRecentTracks(3);
+                    context.recentSongs = recent.map(t => `${t.name} by ${t.artist}`);
+                }
+            } catch (e) {
+                // Fallback to local store
+                const recent = historyStore.getRecentTracks(3);
+                context.recentSongs = recent.map(t => `${t.name} by ${t.artist}`);
+            }
 
-            // 2. Three Top Albums & Genres (from Last.fm if connected)
-            if (lastfmUser) {
-                try {
+            // 2. Three Top Albums & Genres (Prioritize Spotify Top Artists/Tracks)
+            try {
+                if (spotifyService.isConnected()) {
+                    const topArtists = await spotifyService.getTopArtists(5, 'short_term');
+                    const topTracks = await spotifyService.getTopTracks(5, 'short_term');
+
+                    context.genres = [...new Set(topArtists.flatMap(a => a.genres))].slice(0, 3);
+                    context.albums = topTracks.map(t => `${t.album.name} by ${t.artists[0].name}`).slice(0, 3);
+                } else if (lastfmUser) {
+                    // Legacy Last.fm Fallback
                     const [albums, artists] = await Promise.all([
                         lastfmService.getTopAlbums(lastfmUser, 3, '7day'),
                         lastfmService.getTopArtists(lastfmUser, 5, '7day')
                     ]);
-
                     context.albums = albums.map(a => `${a.name} by ${a.artist?.name || a.artist}`);
-
-                    // Extract genres from top artists (takes first tag of top 3 artists)
                     const genrePromises = artists.slice(0, 3).map(artist => 
                         lastfmService.getArtistTags(artist.name).then(tags => tags[0]?.name).catch(() => null)
                     );
                     const genres = await Promise.all(genrePromises);
                     context.genres = [...new Set(genres.filter(g => g))].slice(0, 3);
-                } catch (e) {
-                    console.warn('Could not fetch Last.fm context for AI:', e);
                 }
+            } catch (e) {
+                console.warn('Could not fetch context for AI:', e);
             }
 
             const res = await aiAPI.generateRecommendations(prompt, limit, context);
@@ -177,8 +192,53 @@ class RecommendationService {
         const parsed = await this.parsePrompt(prompt);
         const { type, value, track, artist } = parsed;
 
+        // --- SPOTIFY FIRST STRATEGY ---
+        if (spotifyService.isConnected()) {
+            try {
+                let seedArtists = [];
+                let seedTracks = [];
+                let seedGenres = [];
+
+                if (type === 'artist') {
+                    const found = await spotifyService.searchArtist(value);
+                    if (found) seedArtists.push(found.id);
+                } else if (type === 'track') {
+                    const query = track && artist ? `track:${track} artist:${artist}` : value;
+                    const found = await spotifyService.searchGeneral(query);
+                    if (found) seedTracks.push(found.id);
+                } else if (type === 'genre') {
+                    // Spotify genres must match exactly their list, so this is risky.
+                    // Fallback: search for a playlist/track of that genre or trust the user input if valid
+                    // For now, simpler to use search for a "genre" track/artist or fallback to Last.fm for pure genre
+                    seedGenres.push(value.toLowerCase().replace(/\s+/g, '-')); 
+                }
+
+                if (seedArtists.length > 0 || seedTracks.length > 0 || seedGenres.length > 0) {
+                    console.log(`[Recs] Using Spotify API with seeds:`, { seedArtists, seedTracks, seedGenres });
+                    const spotifyRecs = await spotifyService.getRecommendations(seedArtists, seedTracks, seedGenres, limit);
+                    
+                    if (spotifyRecs.length > 0) {
+                        return spotifyRecs.map(t => ({
+                            id: t.id,
+                            name: t.name,
+                            artist: t.artists[0].name,
+                            album: t.album.name,
+                            imageUrl: t.album.images[0]?.url,
+                            uri: t.uri,
+                            spotifyUrl: t.external_urls.spotify,
+                            previewUrl: t.preview_url
+                        }));
+                    }
+                }
+            } catch (e) {
+                console.warn("Spotify Recommendations failed, falling back to Last.fm:", e);
+            }
+        }
+
+        // --- LAST.FM FALLBACK ---
         try {
             let lastfmTracks = [];
+            // ... (keep existing logic)
 
             if (type === 'artist') {
                 lastfmTracks = await this.getRecommendationsByArtist(value, limit);
@@ -632,13 +692,39 @@ class RecommendationService {
 
     async getRecommendationsBasedOnRecentTopArtists(user, limit = 50) {
         try {
-            // 1. Get Top 5 Artists (Last 7 Days)
-            const topArtists = await lastfmService.getTopArtists(user, 5, '7day');
+            // 1. Get Top Artists (Spotify Priority)
+            let topArtists = [];
+            
+            if (spotifyService.isConnected()) {
+                const spotifyTop = await spotifyService.getTopArtists(5, 'short_term');
+                topArtists = spotifyTop.map(a => ({ name: a.name, id: a.id }));
+            } else if (user) {
+                topArtists = await lastfmService.getTopArtists(user, 5, '7day');
+            }
 
             if (topArtists.length === 0) return [];
 
+            // If we have Spotify IDs, we can use Spotify Recs directly
+            if (spotifyService.isConnected() && topArtists[0].id) {
+                const seedArtists = topArtists.slice(0, 5).map(a => a.id);
+                const spotifyRecs = await spotifyService.getRecommendations(seedArtists, [], [], limit);
+                return spotifyRecs.map(t => ({
+                    id: t.id,
+                    name: t.name,
+                    artist: t.artists[0].name,
+                    album: t.album.name,
+                    imageUrl: t.album.images[0]?.url,
+                    uri: t.uri,
+                    spotifyUrl: t.external_urls.spotify,
+                    previewUrl: t.preview_url
+                }));
+            }
+
+            // Fallback to Last.fm Similarity Graph
             const allTracks = [];
             const seenArtists = new Set(topArtists.map(a => a.name.toLowerCase()));
+            
+            // ... (keep existing Last.fm logic)
 
             // 2. For each top artist, get similar artists
             const promises = topArtists.map(async (artist) => {
