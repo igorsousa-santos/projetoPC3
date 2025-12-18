@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "server": "cd server && npm run server",
-    "start": "node scripts/check-env.js && concurrently \"npm run server\" \"npm run dev\" --names \"BACKEND,FRONTEND\" --prefix-colors \"blue,green\""
+    "start": "node scripts/check-env.cjs && concurrently \"npm run server\" \"npm run dev\" --names \"BACKEND,FRONTEND\" --prefix-colors \"blue,green\""
   },
   "dependencies": {
     "axios": "^1.13.2",
