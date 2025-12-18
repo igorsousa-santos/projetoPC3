@@ -254,11 +254,66 @@ app.post('/api/recommendations/generate', authenticateToken, async (req, res) =>
         });
 
         const recommendations = JSON.parse(response.data.candidates[0].content.parts[0].text);
-        
         res.json(recommendations);
     } catch (error) {
         console.error('Gemini AI Error:', error);
         res.status(500).json({ message: 'Error generating recommendations' });
+    }
+});
+
+app.post('/api/ai/analyze', authenticateToken, async (req, res) => {
+    if (!genAI) return res.status(503).json({ message: 'AI Service not configured' });
+
+    try {
+        const { topArtists = [], topTracks = [] } = req.body;
+        const artistsStr = topArtists.slice(0, 15).map(a => a.name).join(", ");
+
+        const response = await genAI.models.generateContent({
+            model: 'gemini-2.0-flash',
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema: {
+                    type: 'OBJECT',
+                    properties: {
+                        mainGenres: { type: 'ARRAY', items: { type: 'STRING' } },
+                        vibe: { type: 'STRING' },
+                        era: { type: 'STRING' }
+                    }
+                }
+            },
+            contents: [{
+                role: 'user',
+                parts: [{ text: `Analyze the musical taste of a user who listens to these artists: ${artistsStr}.` }]
+            }]
+        });
+
+        const analysis = JSON.parse(response.data.candidates[0].content.parts[0].text);
+        res.json(analysis);
+    } catch (error) {
+        console.error('Gemini Analysis Error:', error);
+        res.status(500).json({ message: 'Error analyzing musical taste' });
+    }
+});
+
+app.post('/api/ai/describe-playlist', authenticateToken, async (req, res) => {
+    if (!genAI) return res.status(503).json({ message: 'AI Service not configured' });
+
+    try {
+        const { name, tracks = [] } = req.body;
+        const trackList = tracks.slice(0, 5).map(t => `${t.name} - ${t.artist}`).join(", ");
+
+        const response = await genAI.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: [{
+                role: 'user',
+                parts: [{ text: `Write a short, catchy, 1-sentence description for a playlist named "${name}" containing songs like: ${trackList}. Language: Portuguese.` }]
+            }]
+        });
+
+        res.json({ description: response.data.candidates[0].content.parts[0].text.trim() });
+    } catch (error) {
+        console.error('Gemini Description Error:', error);
+        res.status(500).json({ message: 'Error generating description' });
     }
 });
 

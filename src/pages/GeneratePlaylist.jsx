@@ -5,6 +5,7 @@ import TrackCard from '../components/Player/TrackCard';
 import recommendationService from '../services/recommendations';
 import usePlaylistStore from '../stores/playlistStore';
 import usePlayerStore from '../stores/playerStore';
+import cacheService from '../services/cache';
 
 function GeneratePlaylist() {
     const [prompt, setPrompt] = useState('');
@@ -25,10 +26,29 @@ function GeneratePlaylist() {
         setGeneratedTracks([]);
         
         try {
+            // Check cache first
+            const cacheKey = cacheService.generateKey('playlist-gen', prompt.trim());
+            const cachedTracks = cacheService.get(cacheKey);
+
+            if (cachedTracks) {
+                console.log('[GeneratePlaylist] Loading from cache:', cacheKey);
+                setGeneratedTracks(cachedTracks);
+                setPlaylistName(prompt.length > 30 ? prompt.substring(0, 30) + '...' : prompt);
+                setIsGenerating(false);
+                return;
+            }
+
+            console.log('[GeneratePlaylist] Cache miss. Generating...');
             const tracks = await recommendationService.getAIRecommendations(prompt);
             setGeneratedTracks(tracks);
+            
             // Suggest a name based on the prompt
             setPlaylistName(prompt.length > 30 ? prompt.substring(0, 30) + '...' : prompt);
+
+            // Cache results for 24 hours
+            if (tracks.length > 0) {
+                cacheService.set(cacheKey, tracks, 24 * 60 * 60 * 1000);
+            }
         } catch (error) {
             console.error('Error generating playlist:', error);
             alert('Erro ao gerar playlist. Tente novamente.');

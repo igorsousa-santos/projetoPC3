@@ -101,5 +101,11 @@ export const playlistAPI = {
 // --- AI API ---
 export const aiAPI = {
     generateRecommendations: (prompt, limit, context) => 
-        handleResponse(api.post('/recommendations/generate', { prompt, limit, context }))
+        handleResponse(api.post('/recommendations/generate', { prompt, limit, context })),
+    
+    analyzeMusicalTaste: (topArtists, topTracks) =>
+        handleResponse(api.post('/ai/analyze', { topArtists, topTracks })),
+    
+    describePlaylist: (name, tracks) =>
+        handleResponse(api.post('/ai/describe-playlist', { name, tracks }))
 };

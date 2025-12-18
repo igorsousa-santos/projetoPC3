@@ -6,7 +6,8 @@ import useListeningHistoryStore from '../stores/listeningHistoryStore';
 import usePlaylistStore from '../stores/playlistStore';
 import lastfmService from '../services/lastfm';
 import itunesService from '../services/itunes';
-import geminiService from '../services/gemini';
+import cacheService from '../services/cache';
+import { aiAPI } from '../services/api';
 
 // Period configurations
 const PERIOD_OPTIONS = [
@@ -550,79 +551,98 @@ export default function ForYou() {
                 });
 
                 // Generate AI recommendations
-                if (useGemini && import.meta.env.VITE_GEMINI_API_KEY && processedArtists.length > 0) {
+                if (useGemini && processedArtists.length > 0) {
                     try {
-                        console.log('[ForYou] Generating AI recommendations...');
-                        
-                        const [trackSuggestions, analysis] = await Promise.all([
-                            geminiService.generatePlaylistSuggestions(processedArtists, processedTracks, 20),
-                            geminiService.analyzeMusicalTaste(processedArtists, processedTracks)
-                        ]);
-                        
-                        // Enrich track suggestions with images
-                        const enrichedTracks = await Promise.all(
-                            trackSuggestions.map(async (s, index) => {
-                                try {
-                                    const searchData = await lastfmService.searchTrack(`${s.name} ${s.artist}`, 1);
-                                    const trackInfo = (searchData.tracks || searchData)[0];
-                                    return {
-                                        id: `rec-${index}`,
-                                        name: s.name,
-                                        artist: s.artist,
-                                        reason: s.reason,
-                                        imageUrl: trackInfo?.image?.[2]?.['#text'] || null
-                                    };
-                                } catch {
-                                    return { id: `rec-${index}`, name: s.name, artist: s.artist, reason: s.reason, imageUrl: null };
-                                }
-                            })
-                        );
+                        const cacheKey = cacheService.generateKey('foryou', lastfmUser, selectedPeriod, selectedWeek?.from || 'none');
+                        const cachedData = cacheService.get(cacheKey);
 
-                        // Generate artist recommendations from similar artists
-                        const artistRecs = [];
-                        for (const artist of processedArtists.slice(0, 3)) {
-                            try {
-                                const similar = await lastfmService.getSimilarArtists(artist.name, 5);
-                                for (const sim of similar) {
-                                    if (!processedArtists.find(a => a.name.toLowerCase() === sim.name.toLowerCase())) {
-                                        const info = await lastfmService.getArtistInfo(sim.name);
-                                        artistRecs.push({
-                                            name: sim.name,
-                                            image: info?.image?.[4]?.['#text'] || info?.image?.[3]?.['#text'],
-                                            reason: `Similar a ${artist.name}`
+                        if (cachedData) {
+                            console.log('[ForYou] Loading from cache:', cacheKey);
+                            setRecommendations(cachedData.recommendations);
+                            setMusicalAnalysis(cachedData.analysis);
+                        } else {
+                            console.log('[ForYou] Cache miss. Generating AI recommendations...');
+                            
+                            const [recRes, analysisRes] = await Promise.all([
+                                aiAPI.generateRecommendations(`Baseado nos meus artistas favoritos: ${processedArtists.slice(0, 5).map(a => a.name).join(', ')}`, 20),
+                                aiAPI.analyzeMusicalTaste(processedArtists, processedTracks)
+                            ]);
+                            
+                            const trackSuggestions = recRes.success ? recRes.data : [];
+                            const analysis = analysisRes.success ? analysisRes.data : null;
+                            
+                            // Enrich track suggestions with images
+                            const enrichedTracks = await Promise.all(
+                                trackSuggestions.map(async (s, index) => {
+                                    try {
+                                        const searchData = await lastfmService.searchTrack(`${s.name} ${s.artist}`, 1);
+                                        const trackInfo = (searchData.tracks || searchData)[0];
+                                        return {
+                                            id: `rec-${index}`,
+                                            name: s.name,
+                                            artist: s.artist,
+                                            reason: s.reason,
+                                            imageUrl: trackInfo?.image?.[2]?.['#text'] || null
+                                        };
+                                    } catch {
+                                        return { id: `rec-${index}`, name: s.name, artist: s.artist, reason: s.reason, imageUrl: null };
+                                    }
+                                })
+                            );
+
+                            // Generate artist recommendations from similar artists
+                            const artistRecs = [];
+                            for (const artist of processedArtists.slice(0, 3)) {
+                                try {
+                                    const similar = await lastfmService.getSimilarArtists(artist.name, 5);
+                                    for (const sim of similar) {
+                                        if (!processedArtists.find(a => a.name.toLowerCase() === sim.name.toLowerCase())) {
+                                            const info = await lastfmService.getArtistInfo(sim.name);
+                                            artistRecs.push({
+                                                name: sim.name,
+                                                image: info?.image?.[4]?.['#text'] || info?.image?.[3]?.['#text'],
+                                                reason: `Similar a ${artist.name}`
+                                            });
+                                        }
+                                    }
+                                } catch (e) {
+                                    console.warn('Error getting similar artists:', e);
+                                }
+                            }
+
+                            // Generate album recommendations
+                            const albumRecs = [];
+                            for (const track of enrichedTracks.slice(0, 5)) {
+                                try {
+                                    const trackInfo = await lastfmService.getTrackInfo(track.name, track.artist);
+                                    if (trackInfo?.album) {
+                                        albumRecs.push({
+                                            name: trackInfo.album.title || trackInfo.album,
+                                            artist: track.artist,
+                                            image: trackInfo.album.image?.[3]?.['#text'] || trackInfo.album.image?.[2]?.['#text'],
+                                            reason: `Por causa de "${track.name}"`
                                         });
                                     }
+                                } catch (e) {
+                                    // Skip
                                 }
-                            } catch (e) {
-                                console.warn('Error getting similar artists:', e);
                             }
+
+                            const finalRecommendations = {
+                                tracks: enrichedTracks,
+                                artists: artistRecs.slice(0, 10),
+                                albums: albumRecs.slice(0, 10)
+                            };
+
+                            setRecommendations(finalRecommendations);
+                            setMusicalAnalysis(analysis);
+
+                            // Cache for 24 hours
+                            cacheService.set(cacheKey, { 
+                                recommendations: finalRecommendations, 
+                                analysis 
+                            }, 24 * 60 * 60 * 1000);
                         }
-
-                        // Generate album recommendations
-                        const albumRecs = [];
-                        for (const track of enrichedTracks.slice(0, 5)) {
-                            try {
-                                const trackInfo = await lastfmService.getTrackInfo(track.name, track.artist);
-                                if (trackInfo?.album) {
-                                    albumRecs.push({
-                                        name: trackInfo.album.title || trackInfo.album,
-                                        artist: track.artist,
-                                        image: trackInfo.album.image?.[3]?.['#text'] || trackInfo.album.image?.[2]?.['#text'],
-                                        reason: `Por causa de "${track.name}"`
-                                    });
-                                }
-                            } catch (e) {
-                                // Skip
-                            }
-                        }
-
-                        setRecommendations({
-                            tracks: enrichedTracks,
-                            artists: artistRecs.slice(0, 10),
-                            albums: albumRecs.slice(0, 10)
-                        });
-                        setMusicalAnalysis(analysis);
-
                     } catch (geminiError) {
                         console.error('[ForYou] AI error:', geminiError);
                         await loadFallbackRecommendations(processedArtists);
@@ -703,12 +723,13 @@ export default function ForYou() {
         try {
             let description = `Playlist gerada pelo Music Horizon com ${recommendations.tracks.length} músicas.`;
             
-            if (import.meta.env.VITE_GEMINI_API_KEY) {
-                try {
-                    description = await geminiService.generatePlaylistDescription(playlistName, recommendations.tracks);
-                } catch (e) {
-                    console.warn('Could not generate AI description:', e);
+            try {
+                const descRes = await aiAPI.describePlaylist(playlistName, recommendations.tracks);
+                if (descRes.success) {
+                    description = descRes.data.description;
                 }
+            } catch (e) {
+                console.warn('Could not generate AI description:', e);
             }
 
             await addPlaylist({
