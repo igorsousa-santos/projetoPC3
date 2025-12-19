@@ -13,12 +13,20 @@ function TrackCard({ track, onPlay }) {
     const handlePlay = (e) => {
         e?.stopPropagation(); // Prevent card click
 
-        if (!spotifyConnected) {
+        // Check actual connection status (token + expiry)
+        const isActuallyConnected = spotifyConnected && localStorage.getItem('spotify_token');
+
+        if (!isActuallyConnected) {
             // Fallback to preview if Spotify not connected
             if (track.previewUrl) {
                 playPreview(track);
             } else {
-                alert('Conecte o Spotify para reproduzir músicas completas');
+                // Check if it's just expired
+                if (localStorage.getItem('spotify_token')) {
+                    alert('Sua sessão do Spotify expirou. Por favor, recarregue a página ou reconecte.');
+                } else {
+                    alert('Conecte o Spotify para reproduzir músicas completas');
+                }
             }
             return;
         }
@@ -87,8 +95,8 @@ function TrackCard({ track, onPlay }) {
                         <button
                             onClick={handlePreviewToggle}
                             className={`w-10 h-10 rounded-full flex items-center justify-center transition-all transform hover:scale-110 shadow-lg border border-white/20 ${isThisPreviewPlaying
-                                    ? 'bg-blue-500 text-white'
-                                    : 'bg-white/20 text-white hover:bg-blue-500 backdrop-blur-sm'
+                                ? 'bg-blue-500 text-white'
+                                : 'bg-white/20 text-white hover:bg-blue-500 backdrop-blur-sm'
                                 }`}
                             title="Ouvir Prévia (30s)"
                         >
@@ -104,8 +112,8 @@ function TrackCard({ track, onPlay }) {
                     <button
                         onClick={handlePlay}
                         className={`w-12 h-12 rounded-full flex items-center justify-center transition-all transform hover:scale-110 shadow-lg border border-white/20 ${canPlay
-                                ? 'bg-green-500 text-white hover:bg-green-400'
-                                : 'bg-gray-600 text-gray-300 cursor-not-allowed'
+                            ? 'bg-green-500 text-white hover:bg-green-400'
+                            : 'bg-gray-600 text-gray-300 cursor-not-allowed'
                             }`}
                         disabled={!canPlay && !hasPreview}
                         title={canPlay ? "Reproduzir no Spotify" : "Spotify não conectado"}

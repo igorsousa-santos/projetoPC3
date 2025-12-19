@@ -134,12 +134,42 @@ const usePlaylistStore = create((set, get) => ({
             );
 
             // Get Spotify URIs for tracks
-            const trackUris = playlist.tracks
-                .filter(track => track.uri || track.spotifyUri)
-                .map(track => track.uri || track.spotifyUri);
+            // Get Spotify URIs for tracks (Fetch missing ones if needed)
+            const trackUris = [];
+            for (const track of playlist.tracks) {
+                let uri = track.uri || track.spotifyUri;
+
+                // If no URI, try to find it now (Lazy Fetch)
+                if (!uri) {
+                    try {
+                        console.log(`Searching URI for: ${track.name} - ${track.artist}`);
+                        const searchResult = await spotifyService.searchTrack(track.name, track.artist);
+                        if (searchResult && searchResult.uri) {
+                            uri = searchResult.uri;
+                            // Update local track object to avoid searching again
+                            track.spotifyUri = uri;
+                            track.uri = uri;
+                        }
+                    } catch (err) {
+                        console.warn(`Could not find track on Spotify for export: ${track.name}`);
+                    }
+                }
+
+                if (uri) {
+                    trackUris.push(uri);
+                }
+            }
 
             if (trackUris.length > 0) {
-                await spotifyService.addTracksToPlaylist(spotifyPlaylist.id, trackUris);
+                // Spotify API limit is 100 tracks per request
+                const chunks = [];
+                for (let i = 0; i < trackUris.length; i += 100) {
+                    chunks.push(trackUris.slice(i, i + 100));
+                }
+
+                for (const chunk of chunks) {
+                    await spotifyService.addTracksToPlaylist(spotifyPlaylist.id, chunk);
+                }
             }
 
             // Atualizar no backend
