@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { LASTFM_API_KEY } from '../config/env.js';
 
 /**
  * Last.fm Service for Code B Backend
@@ -6,7 +7,7 @@ import axios from 'axios';
  */
 class LastFmService {
     constructor() {
-        this.apiKey = process.env.LASTFM_API_KEY;
+        this.apiKey = LASTFM_API_KEY;
         this.baseUrl = 'https://ws.audioscrobbler.com/2.0/';
     }
 

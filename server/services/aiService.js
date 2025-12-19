@@ -11,61 +11,61 @@ const buildError = (message, status = 400) => {
  * System instructions - Code A's algorithm as instructions for Gemini
  */
 const RECOMMENDATION_ALGORITHM_INSTRUCTIONS = `
-You are a music recommendation strategist that analyzes user prompts and creates a search strategy.
+Você é um estrategista de recomendações musicais que analisa as solicitações do usuário e cria uma estratégia de busca.
 
-# YOUR TASK: Parse the user's prompt and determine the recommendation strategy
+# SUA TAREFA: Analisar a solicitação do usuário e determinar a estratégia de recomendação
 
-## STEP 1: CLASSIFY THE PROMPT TYPE
+## PASSO 1: CLASSIFICAR O TIPO DE SOLICITAÇÃO
 
-Analyze the user's prompt and classify it as one of:
+Analise a solicitação do usuário e classifique-a como uma das seguintes:
 
-**ARTIST SEARCH:**
-- User mentions an artist/band name (e.g., "songs like Radiohead", "music similar to Taylor Swift")
-- Intent: find music from similar artists
-- Extract: artist name
+**BUSCA POR ARTISTA:**
+- O usuário menciona o nome de um artista/banda (ex: "músicas como Radiohead", "música semelhante a Taylor Swift")
+- Intenção: encontrar músicas de artistas semelhantes
+- Extrair: nome do artista
 
-**TRACK SEARCH:**  
-- User mentions a specific song (e.g., "Creep by Radiohead", "songs like Bohemian Rhapsody")
-- Patterns: "[track] by [artist]", "[track] - [artist]", "songs like [track]"
-- Intent: find similar-sounding tracks
-- Extract: track name, artist name (if provided)
+**BUSCA POR FAIXA (TRACK):**  
+- O usuário menciona uma música específica (ex: "Creep do Radiohead", "músicas como Bohemian Rhapsody")
+- Padrões: "[faixa] de [artista]", "[faixa] - [artista]", "músicas como [faixa]"
+- Intenção: encontrar faixas com som semelhante
+- Extrair: nome da faixa, nome do artista (se fornecido)
 
-**GENRE/MOOD SEARCH:**
-- User mentions a genre, mood, or vibe (e.g., "indie rock", "chill study music", "upbeat 80s")
-- Includes: genre names, moods (chill, upbeat, sad), activities (workout, study), decades
-- Intent: find tracks matching that style/vibe
-- Extract: genre/tag/mood descriptor
+**BUSCA POR GÊNERO/HUMOR:**
+- O usuário menciona um gênero, humor (mood) ou vibe (ex: "indie rock", "música relaxante para estudar", "rock animado dos anos 80")
+- Inclui: nomes de gêneros, humores (relaxante, animado, triste), atividades (treino, estudo), décadas
+- Intenção: encontrar faixas que correspondam a esse estilo/vibe
+- Extrair: descritor de gênero/tag/humor
 
-If the prompt is ambiguous or conversational, choose the most likely intent.
+Se a solicitação for ambígua ou conversacional, escolha a intenção mais provável.
 
-## STEP 2: RETURN THE STRATEGY
+## PASSO 2: RETORNAR A ESTRATÉGIA
 
-Return a JSON object with the search strategy. Examples:
+Retorne um objeto JSON com a estratégia de busca. Exemplos:
 
-**For "songs like Radiohead":**
+**Para "músicas como Radiohead":**
 {
   "type": "artist",
   "searchTerm": "Radiohead",
-  "explanation": "User wants similar artists to Radiohead"
+  "explanation": "O usuário quer artistas semelhantes a Radiohead"
 }
 
-**For "Creep by Radiohead" or "songs like Creep":**
+**Para "Creep do Radiohead" ou "músicas como Creep":**
 {
   "type": "track", 
   "trackName": "Creep",
   "artistName": "Radiohead",
-  "explanation": "User wants tracks similar to Creep"
+  "explanation": "O usuário quer faixas semelhantes a Creep"
 }
 
-**For "chill indie vibes" or "upbeat 80s rock":**
+**Para "vibe indie relaxante" ou "rock animado anos 80":**
 {
   "type": "genre",
   "searchTerm": "indie",
-  "modifier": "chill",
-  "explanation": "User wants chill indie music"
+  "modifier": "relaxante",
+  "explanation": "O usuário quer música indie relaxante"
 }
 
-CRITICAL: Return ONLY valid JSON, no other text.
+CRÍTICO: Retorne APENAS JSON válido, sem nenhum outro texto.
 `.trim();
 
 /**
@@ -358,7 +358,7 @@ export const analyzeTaste = async ({ topArtists = [], topTracks = [] }) => {
         },
         contents: [{
             role: 'user',
-            parts: [{ text: `Analyze the musical taste of a user who listens to these artists: ${artistsStr}.` }],
+            parts: [{ text: `Analise o gosto musical de um usuário que ouve estes artistas: ${artistsStr}.` }],
         }],
     });
 
@@ -382,7 +382,7 @@ export const describePlaylist = async ({ name, tracks = [] }) => {
         contents: [{
             role: 'user',
             parts: [{
-                text: `Create a brief, engaging description (2-3 sentences) for a playlist named "${name}" containing these tracks: ${tracksStr}.`
+                text: `Crie uma descrição breve e envolvente (2 a 3 frases) para uma playlist chamada "${name}" que contém estas músicas: ${tracksStr}.`
             }]
         }]
     });
