@@ -284,6 +284,21 @@ class LastFMService {
         });
         return data.tracks?.track || [];
     }
+
+    // Search all (artists, tracks, albums) at once
+    async searchAll(query, limit = 10, page = 1) {
+        const [artistsResult, tracksResult, albumsResult] = await Promise.all([
+            this.searchArtist(query, limit, page),
+            this.searchTrack(query, limit, page),
+            this.searchAlbum(query, limit, page)
+        ]);
+
+        return {
+            artists: artistsResult,
+            tracks: tracksResult,
+            albums: albumsResult
+        };
+    }
 }
 
 export default new LastFMService();

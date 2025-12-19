@@ -3,7 +3,7 @@ import Header from '../components/Layout/Header';
 import TrackListItem from '../components/Player/TrackListItem';
 import Toast from '../components/Toast';
 import AchievementToast from '../components/Gamification/AchievementToast';
-import spotifyService from '../services/spotify';
+import lastfmService from '../services/lastfm';
 import usePlaylistStore from '../stores/playlistStore';
 import useGamificationStore from '../stores/gamificationStore';
 import useAuthStore from '../stores/authStore';
@@ -61,9 +61,10 @@ function AccordionSection({ title, icon, color, count, totalCount, isExpanded, o
     );
 }
 
-// Spotify Artist Card Component
+// Last.fm Artist Card Component
 function ArtistResultCard({ artist, onClick }) {
-    const image = artist.images?.[0]?.url || artist.images?.[1]?.url;
+    const image = artist.image?.find(img => img.size === 'large')?.['#text'] || 
+                  artist.image?.find(img => img.size === 'medium')?.['#text'];
 
     return (
         <div 
@@ -89,27 +90,23 @@ function ArtistResultCard({ artist, onClick }) {
                     {artist.name}
                 </h4>
                 <p className="text-sm text-gray-500">
-                    {artist.followers?.total?.toLocaleString() || 0} seguidores
+                    {artist.listeners ? parseInt(artist.listeners).toLocaleString() : '0'} ouvintes
                 </p>
-                {artist.genres?.length > 0 && (
-                    <p className="text-xs text-gray-600 truncate">
-                        {artist.genres.slice(0, 2).join(', ')}
-                    </p>
-                )}
             </div>
             <i className="ph ph-arrow-right text-xl text-gray-600 group-hover:text-white transition-colors"></i>
         </div>
     );
 }
 
-// Spotify Album Card Component
+// Last.fm Album Card Component
 function AlbumResultCard({ album }) {
-    const image = album.images?.[0]?.url || album.images?.[1]?.url;
-    const artistName = album.artists?.map(a => a.name).join(', ') || '';
+    const image = album.image?.find(img => img.size === 'large')?.['#text'] || 
+                  album.image?.find(img => img.size === 'medium')?.['#text'];
+    const artistName = album.artist || '';
 
     return (
         <div className="flex items-center gap-4 p-4 bg-white/5 rounded-xl hover:bg-white/10 transition-all cursor-pointer group">
-            <div className="w-16 h-16 rounded-lg overflow-hidden bg-gradient-to-br from-accent-blue/30 to-green-500/30 flex-shrink-0 shadow-lg">
+            <div className="w-16 h-16 rounded-lg overflow-hidden bg-gradient-to-br from-accent-blue/30 to-red-500/30 flex-shrink-0 shadow-lg">
                 {image ? (
                     <img 
                         src={image} 
@@ -130,26 +127,26 @@ function AlbumResultCard({ album }) {
                 <p className="text-sm text-gray-500 truncate">
                     {artistName}
                 </p>
-                <p className="text-xs text-gray-600">
-                    {album.release_date?.split('-')[0]} • {album.total_tracks} faixas
-                </p>
             </div>
         </div>
     );
 }
 
-// Convert Spotify track to app format
-function normalizeSpotifyTrack(track) {
+// Convert Last.fm track to app format
+function normalizeLastFmTrack(track) {
+    const image = track.image?.find(img => img.size === 'large')?.['#text'] || 
+                  track.image?.find(img => img.size === 'medium')?.['#text'];
+    
     return {
-        id: track.id,
+        id: track.mbid || `${track.artist}-${track.name}`.replace(/\s/g, '-'),
         name: track.name,
-        artist: track.artists?.map(a => a.name).join(', ') || '',
-        album: track.album?.name || '',
-        imageUrl: track.album?.images?.[0]?.url || track.album?.images?.[1]?.url || null,
-        spotifyUri: track.uri,
-        previewUrl: track.preview_url,
-        duration: track.duration_ms,
-        popularity: track.popularity
+        artist: track.artist || '',
+        album: '',
+        imageUrl: image || null,
+        spotifyUri: null,
+        previewUrl: track.url,
+        duration: null,
+        popularity: track.listeners ? parseInt(track.listeners) : 0
     };
 }
 
@@ -157,10 +154,6 @@ function Search() {
     const [searchQuery, setSearchQuery] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
-    
-    // Check if Spotify is connected - verify actual token exists
-    const spotifyConnectedStore = useAuthStore(state => state.spotifyConnected);
-    const spotifyConnected = spotifyConnectedStore && spotifyService.isConnected();
     
     // Search results state
     const [artists, setArtists] = useState([]);
@@ -206,11 +199,6 @@ function Search() {
         e.preventDefault();
         if (!searchQuery.trim()) return;
 
-        if (!spotifyConnected) {
-            setError('Conecte sua conta do Spotify para buscar músicas.');
-            return;
-        }
-
         setIsLoading(true);
         setError(null);
         
@@ -223,18 +211,18 @@ function Search() {
         setAlbumsOffset(0);
 
         try {
-            // Search all categories at once
-            const result = await spotifyService.searchAll(searchQuery, 10, 0);
+            // Search all categories at once using Last.fm
+            const result = await lastfmService.searchAll(searchQuery, 10, 1);
 
             // Set totals
-            setArtistsTotal(result.artists.total);
-            setTracksTotal(result.tracks.total);
-            setAlbumsTotal(result.albums.total);
+            setArtistsTotal(result.artists.totalResults);
+            setTracksTotal(result.tracks.totalResults);
+            setAlbumsTotal(result.albums.totalResults);
 
             // Set results (limit initial display)
-            setArtists(result.artists.items.slice(0, 3));
-            setTracks(result.tracks.items.map(normalizeSpotifyTrack).slice(0, 7));
-            setAlbums(result.albums.items.slice(0, 7));
+            setArtists(Array.isArray(result.artists.artists) ? result.artists.artists.slice(0, 3) : []);
+            setTracks(Array.isArray(result.tracks.tracks) ? result.tracks.tracks.map(normalizeLastFmTrack).slice(0, 7) : []);
+            setAlbums(Array.isArray(result.albums.albums) ? result.albums.albums.slice(0, 7) : []);
 
             // Track gamification
             trackSearch(searchQuery);
@@ -247,11 +235,7 @@ function Search() {
 
         } catch (err) {
             console.error('Search error:', err);
-            if (err.message?.includes('401')) {
-                setError('Sessão expirada. Por favor, reconecte sua conta do Spotify.');
-            } else {
-                setError('Erro ao buscar. Tente novamente.');
-            }
+            setError('Erro ao buscar no Last.fm. Tente novamente.');
         } finally {
             setIsLoading(false);
         }
@@ -263,16 +247,16 @@ function Search() {
         setLoadingMoreArtists(true);
         
         try {
-            const newOffset = artists.length;
-            const result = await spotifyService.searchArtists(searchQuery, 10, newOffset);
+            const nextPage = Math.floor(artists.length / 10) + 1;
+            const result = await lastfmService.searchArtist(searchQuery, 10, nextPage);
             
-            if (result.artists.length === 0) {
+            if (!result.artists || result.artists.length === 0) {
                 setArtistsTotal(artists.length);
                 return;
             }
             
             setArtists(prev => [...prev, ...result.artists]);
-            setArtistsOffset(newOffset);
+            setArtistsOffset(artists.length + result.artists.length);
         } catch (err) {
             console.error('Error loading more artists:', err);
         } finally {
@@ -286,16 +270,16 @@ function Search() {
         setLoadingMoreTracks(true);
         
         try {
-            const newOffset = tracks.length;
-            const result = await spotifyService.searchTracks(searchQuery, 10, newOffset);
+            const nextPage = Math.floor(tracks.length / 10) + 1;
+            const result = await lastfmService.searchTrack(searchQuery, 10, nextPage);
             
-            if (result.tracks.length === 0) {
+            if (!result.tracks || result.tracks.length === 0) {
                 setTracksTotal(tracks.length);
                 return;
             }
             
-            setTracks(prev => [...prev, ...result.tracks.map(normalizeSpotifyTrack)]);
-            setTracksOffset(newOffset);
+            setTracks(prev => [...prev, ...result.tracks.map(normalizeLastFmTrack)]);
+            setTracksOffset(tracks.length + result.tracks.length);
         } catch (err) {
             console.error('Error loading more tracks:', err);
         } finally {
@@ -309,16 +293,16 @@ function Search() {
         setLoadingMoreAlbums(true);
         
         try {
-            const newOffset = albums.length;
-            const result = await spotifyService.searchAlbums(searchQuery, 10, newOffset);
+            const nextPage = Math.floor(albums.length / 10) + 1;
+            const result = await lastfmService.searchAlbum(searchQuery, 10, nextPage);
             
-            if (result.albums.length === 0) {
+            if (!result.albums || result.albums.length === 0) {
                 setAlbumsTotal(albums.length);
                 return;
             }
             
             setAlbums(prev => [...prev, ...result.albums]);
-            setAlbumsOffset(newOffset);
+            setAlbumsOffset(albums.length + result.albums.length);
         } catch (err) {
             console.error('Error loading more albums:', err);
         } finally {
@@ -335,9 +319,6 @@ function Search() {
         try {
             // Track gamification
             trackArtistSearched(artist.name);
-            if (artist.genres && artist.genres.length > 0) {
-                artist.genres.forEach(genre => trackGenreSearched(genre));
-            }
 
             // Check for badges
             const badges = useGamificationStore.getState().checkAndUnlockBadges();
@@ -345,10 +326,10 @@ function Search() {
                 setNewBadges(badges);
             }
 
-            // Get top tracks by this artist
-            const topTracks = await spotifyService.getArtistTopTracks(artist.id);
+            // Get top tracks by this artist using Last.fm
+            const topTracks = await lastfmService.getTopTracksByArtist(artist.name, 20, 1);
             
-            setTracks(topTracks.map(normalizeSpotifyTrack));
+            setTracks(Array.isArray(topTracks) ? topTracks.map(normalizeLastFmTrack) : []);
             setTracksTotal(topTracks.length);
             setTracksOffset(0);
             
@@ -414,27 +395,20 @@ function Search() {
                                 </div>
                                 <button
                                     type="submit"
-                                    disabled={isLoading || !spotifyConnected}
-                                    className="btn-primary px-8 rounded-xl bg-green-600 hover:bg-green-500 disabled:opacity-50"
+                                    disabled={isLoading}
+                                    className="btn-primary px-8 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50"
                                 >
                                     {isLoading ? (
                                         <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                                     ) : (
                                         <>
-                                            <i className="ph-fill ph-spotify-logo mr-2"></i>
+                                            <i className="ph-fill ph-magnifying-glass mr-2"></i>
                                             Buscar
                                         </>
                                     )}
                                 </button>
                             </div>
                         </form>
-                        
-                        {!spotifyConnected && (
-                            <p className="text-center text-yellow-500 mt-4 text-sm">
-                                <i className="ph ph-warning mr-2"></i>
-                                Conecte sua conta do Spotify para buscar músicas
-                            </p>
-                        )}
                     </section>
 
                     {/* Error */}
@@ -448,8 +422,8 @@ function Search() {
                     {/* Loading */}
                     {isLoading && (
                         <div className="flex flex-col items-center justify-center py-16">
-                            <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div>
-                            <p className="text-gray-400 mt-4 animate-pulse">Buscando no Spotify...</p>
+                            <div className="w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full animate-spin"></div>
+                            <p className="text-gray-400 mt-4 animate-pulse">Buscando no Last.fm...</p>
                         </div>
                     )}
 
@@ -461,7 +435,7 @@ function Search() {
                             {tracks.length > 0 && (
                                 <div className="flex justify-between items-center">
                                     <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-                                        <i className="ph-fill ph-spotify-logo text-green-500"></i>
+                                        <i className="ph-fill ph-music-notes text-red-500"></i>
                                         Resultados para "{searchQuery}"
                                     </h2>
                                     <button
@@ -556,14 +530,14 @@ function Search() {
                     {/* Empty State */}
                     {!isLoading && !hasResults && !error && (
                         <div className="text-center py-20">
-                            <div className="w-24 h-24 bg-gradient-to-br from-green-500/20 to-green-600/20 rounded-full flex items-center justify-center mx-auto mb-6">
-                                <i className="ph-fill ph-spotify-logo text-5xl text-green-500"></i>
+                            <div className="w-24 h-24 bg-gradient-to-br from-red-500/20 to-red-600/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                                <i className="ph-fill ph-music-notes text-5xl text-red-500"></i>
                             </div>
                             <h3 className="text-2xl font-bold text-gray-400 mb-2">
-                                Busque no Spotify
+                                Busque no Last.fm
                             </h3>
                             <p className="text-gray-500 max-w-md mx-auto">
-                                Digite o nome de um artista, música ou álbum para encontrar no catálogo do Spotify
+                                Digite o nome de um artista, música ou álbum para descobrir recomendações
                             </p>
                         </div>
                     )}
