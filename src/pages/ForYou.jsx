@@ -9,6 +9,8 @@ import lastfmService from '../services/lastfm';
 import itunesService from '../services/itunes';
 import cacheService from '../services/cache';
 import { aiAPI } from '../services/api';
+import usePlayerStore from '../stores/playerStore';
+import usePreviewStore from '../stores/previewStore';
 
 // Period configurations
 const PERIOD_OPTIONS = [
@@ -38,53 +40,117 @@ function StatCard({ icon, value, label, color }) {
 }
 
 // Artist Card Component with better image handling
-function ArtistCard({ artist, rank, disabled = false }) {
-    const [imgError, setImgError] = useState(false);
+function ArtistCard({ artist, rank }) {
+    const [imageUrl, setImageUrl] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
     const [imgLoaded, setImgLoaded] = useState(false);
-    
-    const hasValidImage = artist.image && 
-        artist.image !== '' && 
-        !artist.image.includes('2a96cbd8b46e442fc41c2b86b821562f') && // Last.fm default
-        !imgError;
+
+    useEffect(() => {
+        let isMounted = true;
+
+        if (!artist?.name) {
+            setIsLoading(false);
+            return;
+        }
+
+        const fetchDeezerImage = async () => {
+            setIsLoading(true);
+            try {
+                // 1. Monta a URL da busca no Deezer
+                const query = encodeURIComponent(artist.name);
+                const targetUrl = `https://api.deezer.com/search/artist?q=${query}&limit=1`;
+                
+                // 2. Usa um Proxy CORS para evitar bloqueio do navegador (Essencial para Deezer no front)
+                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+
+                const response = await fetch(proxyUrl);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    if (data.data && data.data.length > 0) {
+                        const deezerArtist = data.data[0];
+                        
+                        // 3. O Deezer oferece várias qualidades: picture_xl (1000px), picture_big (500px), picture_medium (250px)
+                        // Vamos tentar a XL primeiro para garantir alta resolução
+                        const bestImage = deezerArtist.picture_xl || deezerArtist.picture_big || deezerArtist.picture_medium;
+                        
+                        if (isMounted && bestImage) {
+                            setImageUrl(bestImage);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn(`Erro ao buscar imagem no Deezer para ${artist.name}:`, error);
+            } finally {
+                if (isMounted) setIsLoading(false);
+            }
+        };
+
+        fetchDeezerImage();
+
+        return () => { isMounted = false; };
+    }, [artist?.name]);
 
     return (
-        <div className={`flex-shrink-0 w-40 group cursor-pointer ${disabled ? 'opacity-40 grayscale' : ''}`}>
+        <div className="flex-shrink-0 w-40 group cursor-pointer">
             <div className="relative mb-3">
-                <div className="w-40 h-40 rounded-2xl overflow-hidden bg-gradient-to-br from-accent-purple/30 to-accent-blue/30">
-                    {hasValidImage ? (
+                
+                {/* Container da Imagem */}
+                <div className="w-40 h-40 rounded-2xl overflow-hidden bg-gray-800 shadow-lg relative border border-white/5">
+                    
+                    {/* LOADING (Skeleton) */}
+                    {isLoading && (
+                        <div className="absolute inset-0 bg-gray-700 animate-pulse flex items-center justify-center z-10">
+                            <i className="ph-fill ph-spinner animate-spin text-2xl text-gray-500"></i>
+                        </div>
+                    )}
+
+                    {/* IMAGEM (Se encontrada) */}
+                    {imageUrl && !isLoading ? (
                         <>
-                            {!imgLoaded && (
-                                <div className="w-full h-full flex items-center justify-center absolute inset-0">
-                                    <i className="ph-fill ph-user text-4xl text-gray-600 animate-pulse"></i>
-                                </div>
-                            )}
                             <img 
-                                src={artist.image} 
+                                src={imageUrl} 
                                 alt={artist.name}
-                                className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ${imgLoaded ? '' : 'opacity-0'}`}
-                                onError={() => setImgError(true)}
+                                className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 ${imgLoaded ? 'opacity-100' : 'opacity-0'}`}
                                 onLoad={() => setImgLoaded(true)}
                                 loading="lazy"
                             />
+                            {/* Fundo de transição */}
+                            {!imgLoaded && <div className="absolute inset-0 bg-gray-800" />}
                         </>
                     ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-accent-purple/40 to-accent-blue/40">
-                            <i className="ph-fill ph-user text-5xl text-white/60"></i>
-                        </div>
+                        /* FALLBACK (Se o Deezer não achar) */
+                        !isLoading && (
+                            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-700 to-gray-800 group-hover:from-gray-600 group-hover:to-gray-700 transition-colors">
+                                <span className="text-4xl font-bold text-white/20 select-none uppercase">
+                                    {artist.name ? artist.name.charAt(0) : '?'}
+                                </span>
+                            </div>
+                        )
                     )}
                 </div>
+                
+                {/* Badge de Ranking */}
                 {rank && (
-                    <div className="absolute -top-2 -left-2 w-8 h-8 rounded-lg bg-accent-purple flex items-center justify-center text-white font-bold text-sm shadow-lg">
+                    <div className="absolute -top-2 -left-2 w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm shadow-md z-20">
                         #{rank}
                     </div>
                 )}
             </div>
-            <h4 className="font-semibold text-white truncate group-hover:text-accent-blue transition-colors">{artist.name}</h4>
-            <p className="text-sm text-gray-500">{artist.playcount?.toLocaleString() || artist.count?.toLocaleString() || 0} plays</p>
+            
+            {/* Nome do Artista */}
+            <h4 className="font-semibold text-white truncate text-sm group-hover:text-blue-400 transition-colors text-center" title={artist.name}>
+                {artist.name}
+            </h4>
+            
+            {/* Scrobbles (Dados originais) */}
+            <p className="text-xs text-gray-500 text-center mt-0.5">
+                {artist.playcount ? `${Number(artist.playcount).toLocaleString()} scrobbles` : ''}
+            </p>
         </div>
     );
 }
-
 // Album Card Component
 function AlbumCard({ album, rank, disabled = false }) {
     const [imgError, setImgError] = useState(false);
@@ -135,51 +201,161 @@ function AlbumCard({ album, rank, disabled = false }) {
 }
 
 // Track Card Component for horizontal scroll
-function TrackCard({ track, rank, disabled = false }) {
+function TrackCard({ track, rank, onPlay, disabled = false }) {
+    // --- LÓGICA DO PLAYER (Mantida) ---
+    const playTrack = usePlayerStore(state => state.playTrack);
+    const spotifyConnected = useAuthStore(state => state.spotifyConnected);
+    const { playPreview, currentTrack, isPlaying: isPreviewPlaying } = usePreviewStore();
+    const isThisPreviewPlaying = isPreviewPlaying && currentTrack?.id === track.id;
+
+    const handlePlay = (e) => {
+        e?.stopPropagation();
+        const isActuallyConnected = spotifyConnected && localStorage.getItem('spotify_token');
+
+        if (!isActuallyConnected) {
+            if (track.previewUrl) {
+                playPreview(track);
+            } else {
+                if (localStorage.getItem('spotify_token')) {
+                    alert('Sua sessão do Spotify expirou. Por favor, recarregue a página.');
+                } else {
+                    alert('Conecte o Spotify para reproduzir músicas completas');
+                }
+            }
+            return;
+        }
+
+        if (track.uri || track.spotifyUri) {
+            onPlay ? onPlay() : playTrack(track);
+        } else {
+            alert('Esta música não está disponível no Spotify');
+        }
+    };
+
+    const handlePreviewToggle = (e) => {
+        e.stopPropagation();
+        playPreview(track);
+    };
+
+    const canPlay = spotifyConnected && (track.uri || track.spotifyUri);
+    const hasPreview = !!track.previewUrl;
+
+    // --- LÓGICA VISUAL (Corrigida) ---
     const [imgError, setImgError] = useState(false);
     const [imgLoaded, setImgLoaded] = useState(false);
     
-    const imageUrl = track.image?.[2]?.['#text'] || track.image?.[3]?.['#text'] || track.imageUrl;
+    // CORREÇÃO AQUI: Função robusta para pegar a imagem de qualquer formato
+    const resolveImage = (t) => {
+        // 1. Se já tiver imageUrl direta
+        if (t.imageUrl) return t.imageUrl;
+        
+        // 2. Se t.image for uma string (URL direta) - Lógica do Card Original
+        if (typeof t.image === 'string') return t.image;
+
+        // 3. Se t.image for Array (Padrão Last.fm) - Lógica do Novo Front
+        if (Array.isArray(t.image)) {
+            // Tenta pegar 'large' (index 2) ou 'extralarge' (index 3)
+            return t.image[2]?.['#text'] || t.image[3]?.['#text'];
+        }
+
+        // 4. Fallback padrão do Spotify (album.images)
+        if (t.album && t.album.images && t.album.images.length > 0) {
+            return t.album.images[0].url;
+        }
+
+        return null;
+    };
+
+    const imageUrl = resolveImage(track);
+    
     const hasValidImage = imageUrl && 
         imageUrl !== '' && 
-        !imageUrl.includes('2a96cbd8b46e442fc41c2b86b821562f') &&
+        imageUrl !== 'undefined' &&
+        !imageUrl.includes('2a96cbd8b46e442fc41c2b86b821562f') && // Filtra placeholder do Last.fm
         !imgError;
 
     return (
-        <div className={`flex-shrink-0 w-36 group cursor-pointer ${disabled ? 'opacity-40 grayscale' : ''}`}>
-            <div className="relative mb-3">
-                <div className="w-36 h-36 rounded-xl overflow-hidden bg-gradient-to-br from-green-500/30 to-accent-purple/30 shadow-lg">
+        <div className={`flex-shrink-0 w-36 group cursor-pointer ${disabled ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
+            <div className="relative mb-3 group/image">
+                
+                <div className="w-36 h-36 rounded-xl overflow-hidden bg-gradient-to-br from-green-500/30 to-accent-purple/30 shadow-lg relative">
                     {hasValidImage ? (
                         <>
                             {!imgLoaded && (
-                                <div className="w-full h-full flex items-center justify-center absolute inset-0">
+                                <div className="w-full h-full flex items-center justify-center absolute inset-0 bg-gray-800">
                                     <i className="ph-fill ph-music-note text-4xl text-gray-600 animate-pulse"></i>
                                 </div>
                             )}
                             <img 
                                 src={imageUrl} 
                                 alt={track.name}
-                                className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ${imgLoaded ? '' : 'opacity-0'}`}
+                                className={`w-full h-full object-cover transition-transform duration-300 ${imgLoaded ? 'group-hover/image:scale-105' : 'opacity-0'}`}
                                 onError={() => setImgError(true)}
                                 onLoad={() => setImgLoaded(true)}
                                 loading="lazy"
                             />
                         </>
                     ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-green-500/40 to-accent-purple/40">
-                            <i className="ph-fill ph-music-note text-5xl text-white/60"></i>
+                        // Fallback se não tiver imagem (Gradient + Icone)
+                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-700 to-gray-800">
+                             {/* Tenta gerar uma cor baseada no nome se não tiver imagem, igual ao original */}
+                            <i className="ph-fill ph-music-note text-5xl text-white/20"></i>
+                        </div>
+                    )}
+
+                    {/* OVERLAY PLAY/PREVIEW */}
+                    <div className={`absolute inset-0 bg-black/40 opacity-0 group-hover/image:opacity-100 transition-opacity flex items-center justify-center gap-2 backdrop-blur-[2px] ${isThisPreviewPlaying ? 'opacity-100' : ''}`}>
+                        
+                        {hasPreview && (
+                            <button
+                                onClick={handlePreviewToggle}
+                                className={`w-8 h-8 rounded-full flex items-center justify-center transition-all transform hover:scale-110 shadow-lg border border-white/20 ${isThisPreviewPlaying
+                                    ? 'bg-blue-500 text-white'
+                                    : 'bg-white/20 text-white hover:bg-blue-500 backdrop-blur-sm'
+                                    }`}
+                            >
+                                <i className={`ph-fill ${isThisPreviewPlaying ? 'ph-stop' : 'ph-speaker-high'} text-sm`}></i>
+                            </button>
+                        )}
+
+                        <button
+                            onClick={handlePlay}
+                            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all transform hover:scale-110 shadow-lg border border-white/20 ${canPlay
+                                ? 'bg-green-500 text-white hover:bg-green-400'
+                                : 'bg-gray-600 text-gray-300 cursor-not-allowed'
+                                }`}
+                            disabled={!canPlay && !hasPreview}
+                        >
+                            <i className={`ph-fill ${canPlay ? 'ph-play' : 'ph-spotify-logo'} text-lg ml-0.5`}></i>
+                        </button>
+                    </div>
+
+                    {/* VISUAL EQ */}
+                    {isThisPreviewPlaying && (
+                        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 flex gap-0.5 items-end h-3 pointer-events-none">
+                            <div className="w-1 bg-blue-400 animate-[bounce_1s_infinite] h-2"></div>
+                            <div className="w-1 bg-blue-400 animate-[bounce_1.2s_infinite] h-3"></div>
+                            <div className="w-1 bg-blue-400 animate-[bounce_0.8s_infinite] h-2"></div>
                         </div>
                     )}
                 </div>
+
                 {rank && (
-                    <div className="absolute -top-2 -left-2 w-8 h-8 rounded-lg bg-green-500 flex items-center justify-center text-white font-bold text-sm shadow-lg">
+                    <div className="absolute -top-2 -left-2 w-8 h-8 rounded-lg bg-green-500 flex items-center justify-center text-white font-bold text-sm shadow-lg z-10">
                         #{rank}
                     </div>
                 )}
             </div>
-            <h4 className="font-semibold text-white text-sm truncate group-hover:text-green-400 transition-colors">{track.name}</h4>
-            <p className="text-xs text-gray-500 truncate">{track.artist?.name || track.artist?.['#text'] || track.artist}</p>
-            <p className="text-xs text-gray-600">{track.playcount?.toLocaleString() || 0} plays</p>
+
+            <h4 className="font-semibold text-white text-sm truncate group-hover:text-green-400 transition-colors" title={track.name}>
+                {track.name}
+            </h4>
+            <p className="text-xs text-gray-500 truncate" title={track.artist?.name || track.artist}>
+                {track.artist?.name || track.artist?.['#text'] || track.artist}
+            </p>
+            <p className="text-xs text-gray-600 mt-0.5">
+                {track.playcount ? `${Number(track.playcount).toLocaleString()} plays` : (track.album || '')}
+            </p>
         </div>
     );
 }
