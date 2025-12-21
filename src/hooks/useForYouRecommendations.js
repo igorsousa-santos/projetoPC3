@@ -4,6 +4,7 @@ import lastfmService from '../services/lastfm';
 import itunesService from '../services/itunes';
 import cacheService from '../services/cache';
 import { aiAPI } from '../services/api';
+import recommendationService from '../services/recommendations';
 
 // Helper function fora do hook para manter limpo
 const fetchAlbumsForDisplay = async (artistNamesSource) => {
@@ -41,45 +42,6 @@ export function useForYouRecommendations(topArtists, topTracks, selectedPeriod, 
     const [recommendations, setRecommendations] = useState({ tracks: [], artists: [], albums: [] });
     const [musicalAnalysis, setMusicalAnalysis] = useState(null);
 
-    // Lógica de Fallback
-    const loadFallbackRecommendations = async (artists) => {
-        try {
-            const trackRecs = [];
-            const artistRecs = [];
-            
-            for (const artist of artists.slice(0, 5)) {
-                let similar = [];
-                try { similar = await lastfmService.getSimilarArtists(artist.name, 3); } catch (e) { continue; }
-                
-                for (const simArtist of similar) {
-                    if (!artists.find(a => a.name.toLowerCase() === simArtist.name.toLowerCase()) && 
-                        !artistRecs.find(a => a.name === simArtist.name)) {
-                        const info = await lastfmService.getArtistInfo(simArtist.name);
-                        artistRecs.push({
-                            name: simArtist.name,
-                            image: info?.image?.[4]?.['#text'] || info?.image?.[3]?.['#text'],
-                            reason: `Similar a ${artist.name}`
-                        });
-                    }
-                    try {
-                        const tracks = await lastfmService.getTopTracksByArtist(simArtist.name, 2);
-                        trackRecs.push(...tracks.map(t => ({
-                            id: t.mbid || `${t.name}-${simArtist.name}`,
-                            name: t.name,
-                            artist: simArtist.name,
-                            imageUrl: t.image?.[2]?.['#text']
-                        })));
-                    } catch (e) { }
-                }
-            }
-
-            const candidateArtists = artistRecs.length > 0 ? artistRecs.map(a => a.name) : artists.map(a => a.name);
-            const albumRecs = await fetchAlbumsForDisplay(candidateArtists);
-
-            setRecommendations({ tracks: trackRecs.slice(0, 20), artists: artistRecs.slice(0, 15), albums: albumRecs });
-        } catch (error) { console.error('[ForYou] Fallback error:', error); }
-    };
-
     // Lógica Principal
     const generateRecommendations = async () => {
         if (!topArtists || topArtists.length === 0) return;
@@ -88,21 +50,66 @@ export function useForYouRecommendations(topArtists, topTracks, selectedPeriod, 
         setRecommendations({ tracks: [], artists: [], albums: [] });
 
         try {
-            if (useGemini) {
-                // ... MODO IA (Copie sua lógica completa do último passo aqui) ...
-                // LEMBRETE: Use fetchAlbumsForDisplay e NÃO chame loadFallbackRecommendations no catch
-                // (Vou omitir o bloco grande para não ficar repetitivo, use o código que acabamos de corrigir)
-                
-                // Exemplo curto:
-                const cacheKey = cacheService.generateKey('foryou', lastfmUser, selectedPeriod, selectedWeek?.from || 'none', 'gemini-v7-modular');
-                // ... verificação de cache ...
-                // ... chamadas API ...
-                // ... enriquecimento ...
-                // ... fetchAlbumsForDisplay ...
-                
+            const geminiEnabled = useGemini && Boolean(import.meta.env.VITE_GEMINI_API_KEY);
+            const safeTopTracks = Array.isArray(topTracks) ? topTracks : [];
+
+            if (geminiEnabled) {
+                const cacheKey = cacheService.generateKey(
+                    'foryou',
+                    lastfmUser || 'local',
+                    selectedPeriod,
+                    selectedWeek?.from || 'none',
+                    'gemini-v1'
+                );
+
+                const cached = cacheService.get(cacheKey);
+                if (cached) {
+                    setRecommendations(cached.recommendations || { tracks: [], artists: [], albums: [] });
+                    setMusicalAnalysis(cached.musicalAnalysis || null);
+                    setIsRecLoading(false);
+                    return;
+                }
+
+                const topArtistNames = topArtists.slice(0, 15).map(a => a.name).filter(Boolean);
+                const topTrackPairs = safeTopTracks.slice(0, 20).map(t => `${t.name} - ${t.artist}`).join(', ');
+
+                const prompt = `Crie uma seleção de músicas surpreendente considerando os artistas que a pessoa mais ouve (${topArtistNames.join(', ')}) e as faixas recentes (${topTrackPairs}). Misture novidades com sons parecidos e evite repetir o mesmo artista muitas vezes.`;
+
+                let analysis = null;
+                try {
+                    const analysisRes = await aiAPI.analyzeMusicalTaste(topArtists, safeTopTracks.slice(0, 30));
+                    if (analysisRes.success) {
+                        analysis = analysisRes.data;
+                        setMusicalAnalysis(analysisRes.data);
+                    } else {
+                        setMusicalAnalysis(null);
+                    }
+                } catch (e) {
+                    console.warn('[ForYou] analyze taste failed', e);
+                    setMusicalAnalysis(null);
+                }
+
+                const aiResult = await recommendationService.getAIRecommendations(prompt, 30, topArtists);
+
+                const albumRecs = aiResult.albums?.length > 0
+                    ? aiResult.albums
+                    : await fetchAlbumsForDisplay(topArtistNames);
+
+                const finalRecs = {
+                    tracks: aiResult.tracks || [],
+                    artists: aiResult.artists || [],
+                    albums: albumRecs || []
+                };
+
+                if (finalRecs.tracks.length > 0) {
+                    setRecommendations(finalRecs);
+                    cacheService.set(cacheKey, { recommendations: finalRecs, musicalAnalysis: analysis }, 10 * 60 * 1000);
+                } else {
+                    setRecommendations({ tracks: [], artists: [], albums: [] });
+                }
             } else {
                 setMusicalAnalysis(null);
-                await loadFallbackRecommendations(topArtists);
+                setRecommendations({ tracks: [], artists: [], albums: [] });
             }
         } catch (error) {
             console.error('[ForYou] Error:', error);
