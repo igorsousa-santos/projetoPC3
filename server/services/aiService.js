@@ -244,11 +244,25 @@ export const generateRecommendations = async ({ prompt, limit = 20, context = {}
         throw buildError('Failed to fetch music recommendations', 500);
     }
 
+    // Debug info on raw Last.fm result size and sample
+    console.log('[Enhanced AI] Last.fm tracks count:', lastfmTracks?.length || 0);
+    if (lastfmTracks && lastfmTracks.length > 0) {
+        console.log('[Enhanced AI] Sample track:', lastfmTracks[0]);
+    }
+
     // STEP 3: Apply Code A's filtering algorithm
     let filtered = RecommendationFilters.deduplicateTracks(lastfmTracks);
     filtered = RecommendationFilters.applyDiversityFilter(filtered, 2);
     filtered = RecommendationFilters.shuffleArray(filtered);
     filtered = filtered.slice(0, limit);
+
+    console.log('[Enhanced AI] Filtered tracks count:', filtered?.length || 0);
+
+    // If filtered is empty, surface a clear error (no classic fallback)
+    if (!filtered || filtered.length === 0) {
+        console.warn('[Enhanced AI] Zero tracks after filtering. Strategy:', strategy, 'RawCount:', lastfmTracks?.length || 0);
+        throw buildError('AI returned zero tracks after filtering', 502);
+    }
 
     // STEP 4: Return enriched results
     // Note: Frontend or additional service should enrich with Spotify/album art
