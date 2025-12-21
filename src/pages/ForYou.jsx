@@ -237,53 +237,60 @@ export default function ForYou() {
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
                     
                     {/* LEFT SIDEBAR */}
-                    <div className="lg:col-span-1 space-y-6">
-                        <PeriodSelector
-                            selectedPeriod={selectedPeriod}
-                            onPeriodChange={setSelectedPeriod}
-                            availableWeeks={availableWeeks}
-                            onWeekSelect={setSelectedWeek}
-                            selectedWeek={selectedWeek}
-                        />
+                    {/* LEFT SIDEBAR */}
+<div className="lg:col-span-1 space-y-6">
+    <PeriodSelector
+        selectedPeriod={selectedPeriod}
+        onPeriodChange={setSelectedPeriod}
+        availableWeeks={availableWeeks}
+        onWeekSelect={setSelectedWeek}
+        selectedWeek={selectedWeek}
+        PERIOD_OPTIONS={PERIOD_OPTIONS}
+    />
 
-                        {/* AI Toggle */}
-                        {import.meta.env.VITE_GEMINI_API_KEY && (
-                            <div className="bg-dark-card/50 border border-white/5 rounded-2xl p-4">
-                                <label className="flex items-center justify-between cursor-pointer">
-                                    <span className="text-white flex items-center gap-2">
-                                        <i className="ph ph-robot text-xl text-accent-purple"></i>
-                                        Usar IA
-                                    </span>
-                                    <input 
-                                        type="checkbox" 
-                                        checked={useGemini} 
-                                        onChange={(e) => setUseGemini(e.target.checked)}
-                                        className="w-5 h-5 rounded accent-accent-purple"
-                                    />
-                                </label>
-                                <p className="text-xs text-gray-500 mt-2">
-                                    Recomendações mais criativas e inteligentes.
-                                </p>
-                            </div>
-                        )}
+    {/* AI Toggle - REMOVIDA A CONDIÇÃO QUE ESCONDIA A CAIXA */}
+    <div className="bg-dark-card/50 border border-white/5 rounded-2xl p-4">
+        <label className="flex items-center justify-between cursor-pointer">
+            <span className="text-white flex items-center gap-2">
+                <i className="ph ph-robot text-xl text-accent-purple"></i>
+                Usar IA
+            </span>
+            <input 
+                type="checkbox" 
+                checked={useGemini} 
+                onChange={(e) => setUseGemini(e.target.checked)}
+                className="w-5 h-5 rounded accent-accent-purple"
+            />
+        </label>
+        <p className="text-xs text-gray-500 mt-2">
+            Recomendações mais criativas e inteligentes.
+        </p>
+        
+        {/* Opcional: Aviso visual se a chave não estiver configurada */}
+        {!import.meta.env.VITE_GEMINI_API_KEY && (
+            <p className="text-xs text-red-400 mt-2 font-semibold">
+                ⚠ API Key não detectada
+            </p>
+        )}
+    </div>
 
-                        {/* Recent Tracks */}
-                        <div className="bg-dark-card/50 border border-white/5 rounded-2xl p-4">
-                            <h4 className="text-white font-semibold mb-3 flex items-center gap-2">
-                                <i className="ph-fill ph-clock-counter-clockwise text-accent-blue"></i>
-                                Recentes
-                            </h4>
-                            <div className="space-y-1">
-                                {recentTracks.length > 0 ? (
-                                    recentTracks.slice(0, 6).map((track, index) => (
-                                        <TrackListItem key={`recent-${track.id}-${index}`} track={track} index={index} compact />
-                                    ))
-                                ) : (
-                                    <p className="text-gray-500 text-center py-4 text-sm">Nada ouvido recentemente</p>
-                                )}
-                            </div>
-                        </div>
-                    </div>
+    {/* Recent Tracks */}
+    <div className="bg-dark-card/50 border border-white/5 rounded-2xl p-4">
+        <h4 className="text-white font-semibold mb-3 flex items-center gap-2">
+            <i className="ph-fill ph-clock-counter-clockwise text-accent-blue"></i>
+            Recentes
+        </h4>
+        <div className="space-y-1">
+            {recentTracks.length > 0 ? (
+                recentTracks.slice(0, 6).map((track, index) => (
+                    <TrackListItem key={`recent-${track.id}-${index}`} track={track} index={index} compact />
+                ))
+            ) : (
+                <p className="text-gray-500 text-center py-4 text-sm">Nada ouvido recentemente</p>
+            )}
+        </div>
+    </div>
+</div>
 
                     {/* MAIN CONTENT AREA */}
                     <div className="lg:col-span-3 space-y-8">
