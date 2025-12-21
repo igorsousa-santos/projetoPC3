@@ -1,8 +1,7 @@
 import lastfmService from './lastfm';
-import itunesService from './itunes';
+import spotifyService from './spotify';
 import deezerService from './deezer';
-import spotifyService from './spotify'; // Adicionado caso use Spotify
-import imageService from './imageService'; // Importante para consistência de imagens
+import itunesService from './itunes';
 import usePreviewStore from '../stores/previewStore';
 import useListeningHistoryStore from '../stores/listeningHistoryStore';
 import useAuthStore from '../stores/authStore';
@@ -12,109 +11,329 @@ import { aiAPI } from './api';
 class RecommendationService {
     constructor() {
         this.seenTracks = new Set(); // Histórico da sessão para evitar repetições
-        
-        // Dicionário de tradução de Humor (Português -> Inglês)
-        this.moodTranslations = {
-            'triste': 'sad', 'tristes': 'sad', 'tristeza': 'melancholic',
-            'alegre': 'happy', 'feliz': 'happy', 'animada': 'upbeat',
-            'calma': 'chill', 'relaxante': 'relaxing', 'estudo': 'study',
-            'treino': 'workout', 'festa': 'party', 'dançar': 'dance',
-            'noite': 'night', 'dia': 'day', 'chuva': 'rainy', 'sol': 'sunny',
-            'rock': 'rock', 'pop': 'pop', 'jazz': 'jazz', 'metal': 'metal'
-            // ... (Mantenha o resto do seu dicionário aqui)
-        };
     }
 
-    // --- ENTRADA PRINCIPAL: IA (Gemini/OpenAI) ---
     async getAIRecommendations(prompt, limit = 25) {
         try {
-            const context = { genres: [], albums: [], recentSongs: [] };
+            // --- Rule of Threes Context Gathering ---
+            const context = {
+                genres: [],
+                albums: [],
+                recentSongs: []
+            };
+
+            const historyStore = useListeningHistoryStore.getState();
             const authStore = useAuthStore.getState();
             const lastfmUser = authStore.lastfmUser;
 
-            if (lastfmUser) {
-                try {
-                    // MUDANÇA 1: Aumentado para Top 10 Artistas para dar mais variedade
-                    const [albums, artists, recent] = await Promise.all([
-                        lastfmService.getTopAlbums(lastfmUser, 5, '7day'), // Top 5 Albums
-                        lastfmService.getTopArtists(lastfmUser, 10, '7day'), // TOP 10 Artistas
-                        lastfmService.getRecentTracks(lastfmUser, 5)
-                    ]);
+            // 1. Three Recent Songs (Prioritize Spotify Recently Played)
+            try {
+                if (spotifyService.isConnected()) {
+                    const recentSpotify = await spotifyService.getRecentlyPlayed(3);
+                    context.recentSongs = recentSpotify.map(item => `${item.track.name} by ${item.track.artists[0].name}`);
+                } else {
+                    const recent = historyStore.getRecentTracks(3);
+                    context.recentSongs = recent.map(t => `${t.name} by ${t.artist}`);
+                }
+            } catch (e) {
+                // Fallback to local store
+                const recent = historyStore.getRecentTracks(3);
+                context.recentSongs = recent.map(t => `${t.name} by ${t.artist}`);
+            }
 
+            // 2. Three Top Albums & Genres (Prioritize Spotify Top Artists/Tracks)
+            try {
+                if (spotifyService.isConnected()) {
+                    const topArtists = await spotifyService.getTopArtists(5, 'short_term');
+                    const topTracks = await spotifyService.getTopTracks(5, 'short_term');
+
+                    context.genres = [...new Set(topArtists.flatMap(a => a.genres))].slice(0, 3);
+                    context.albums = topTracks.map(t => `${t.album.name} by ${t.artists[0].name}`).slice(0, 3);
+                } else if (lastfmUser) {
+                    // Legacy Last.fm Fallback
+                    const [albums, artists] = await Promise.all([
+                        lastfmService.getTopAlbums(lastfmUser, 3, '7day'),
+                        lastfmService.getTopArtists(lastfmUser, 5, '7day')
+                    ]);
                     context.albums = albums.map(a => `${a.name} by ${a.artist?.name || a.artist}`);
-                    
-                    // Pega gêneros baseados nos top 10 artistas
-                    const genrePromises = artists.map(artist => 
+                    const genrePromises = artists.slice(0, 3).map(artist =>
                         lastfmService.getArtistTags(artist.name).then(tags => tags[0]?.name).catch(() => null)
                     );
                     const genres = await Promise.all(genrePromises);
-                    context.genres = [...new Set(genres.filter(g => g))].slice(0, 5); // Top 5 Gêneros únicos
-
-                    context.recentSongs = recent.map(t => `${t.name} by ${t.artist['#text']}`);
-                } catch (e) {
-                    console.warn('Falha ao obter contexto do Last.fm para IA:', e);
+                    context.genres = [...new Set(genres.filter(g => g))].slice(0, 3);
                 }
+            } catch (e) {
+                console.warn('Could not fetch context for AI:', e);
             }
 
             const res = await aiAPI.generateRecommendations(prompt, limit, context);
-            
             if (res.success && res.data) {
-                if (Array.isArray(res.data)) {
-                    const enriched = await this.enrichTracks(res.data);
-                    return { tracks: this.smartShuffle(enriched), artists: [], albums: [] };
-                } else {
-                    const result = {
-                        tracks: [],
-                        artists: [],
-                        albums: []
-                    };
-
-                    // 1. Enriquece Tracks e aplica Smart Shuffle (Não agrupar artistas)
-                    if (res.data.tracks && res.data.tracks.length > 0) {
-                        const enrichedTracks = await this.enrichTracks(res.data.tracks);
-                        result.tracks = this.smartShuffle(enrichedTracks);
-                    }
-
-                    // 2. Enriquece Artistas
-                    if (res.data.artists && res.data.artists.length > 0) {
-                        result.artists = await this.enrichArtists(this.shuffleArray(res.data.artists));
-                    }
-
-                    // 3. Enriquece Álbuns
-                    if (res.data.albums && res.data.albums.length > 0) {
-                         const albumTracks = res.data.albums.map(a => ({ name: 'Intro', artist: a.artist, album: a.name })); 
-                         const enrichedAlbumCovers = await this.enrichTracks(albumTracks);
-                         
-                         result.albums = res.data.albums.map((originalAlbum, index) => ({
-                             ...originalAlbum,
-                             image: enrichedAlbumCovers[index]?.imageUrl || null
-                         }));
-                    }
-
-                    return result;
-                }
+                // Enrich tracks with images/previews from Spotify/iTunes/Deezer
+                const enriched = await this.enrichWithSpotify(res.data);
+                return enriched;
             }
-            
-            throw new Error(res.message || 'Falha na geração da IA');
-
+            throw new Error(res.message || 'AI generation failed');
         } catch (error) {
-            console.error('Erro na Recomendação por IA:', error);
-            useToastStore.getState().warning('Quota de IA excedida. Usando algoritmo clássico.');
+            console.error('AI Recommendation Error:', error);
+
+            // Show warning to user that AI quota is exceeded
+            useToastStore.getState().warning(
+                'Quota de IA excedida. Usando recomendações básicas (menos precisas).'
+            );
+
+            // Fallback to traditional method
             return this.getRecommendations(prompt, limit);
         }
     }
 
-    // --- ENTRADA SECUNDÁRIA: ALGORITMO CLÁSSICO ---
+    // Helper para normalizar strings para comparação (remove acentos e caracteres especiais)
+    normalizeString(str) {
+        if (!str) return '';
+        return str.toLowerCase()
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .trim();
+    }
+
+    // Limpa o nome da faixa para melhorar a busca (remove "prod.", "ft.", "**", etc.)
+    cleanTrackName(name) {
+        if (!name) return '';
+        let cleaned = name;
+
+        // 1. Remove explicit "prod.", "feat.", "ft." outside parentheses (greedy until end)
+        cleaned = cleaned.replace(/\s(prod\.|feat\.|ft\.|with).*/gi, '');
+
+        // 2. Remove ALL content in square brackets [ ... ]
+        // Square brackets are almost always metadata in Last.fm (e.g. [Meters], [Clean], [Video])
+        cleaned = cleaned.replace(/\[.*?\]/g, '');
+
+        // 3. Remove known garbage patterns
+        cleaned = cleaned
+            .replace(/\*\*.*?\*\*/g, '')
+            .replace(/EP OUT NOW/gi, '')
+            .replace(/\(LQ\)/gi, '')
+            .replace(/\(HQ\)/gi, '');
+
+        // 4. Remove parentheses containing specific keywords (keep normal parentheses like "(Don't Fear) The Reaper")
+        const keywords = ['prod', 'feat', 'ft', 'bootleg', 'remix', 'edit', 'demo', 'version', 'slowed', 'reverb', 'mix', 'vip', 'live', 'session'];
+        const noiseRegex = new RegExp(`\\(.*?\\b(?:${keywords.join('|')})\\b.*?\\)`, 'gi');
+        cleaned = cleaned.replace(noiseRegex, '');
+
+        // 5. Remove Date patterns (e.g. 02.03.2013, 2023)
+        cleaned = cleaned.replace(/\d{2}\.\d{2}\.\d{4}/g, ''); // dd.mm.yyyy
+        cleaned = cleaned.replace(/\d{4}/g, ''); // yyyy (risky but often needed for live sets)
+
+        // 6. Remove "p1", "pt.1", "part 1"
+        cleaned = cleaned.replace(/\bp\d+\b/gi, '');
+        cleaned = cleaned.replace(/\bpt\.?\s*\d+\b/gi, '');
+        cleaned = cleaned.replace(/\bpart\s*\d+\b/gi, '');
+
+        // 7. Remove trailing " - " garbage
+        cleaned = cleaned.replace(/\s+-\s+.*$/, '');
+
+        return cleaned.replace(/\s+/g, ' ').trim();
+    }
+
+    // Portuguese to English mood translation dictionary
+    moodTranslations = {
+        // Emotions
+        'triste': 'sad', 'tristes': 'sad', 'tristeza': 'melancholic',
+        'alegre': 'happy', 'alegres': 'happy', 'feliz': 'happy', 'felizes': 'happy',
+        'calma': 'chill', 'calmas': 'chill', 'tranquila': 'calm', 'tranquilas': 'calm',
+        'animada': 'upbeat', 'animadas': 'upbeat', 'energética': 'energetic',
+        'romântica': 'romantic', 'românticas': 'romantic', 'amor': 'love',
+        'relaxante': 'relaxing', 'relaxantes': 'relaxing',
+        'melancólica': 'melancholic', 'melancólicas': 'melancholic',
+        'nostálgica': 'nostalgic', 'nostálgicas': 'nostalgic',
+        'raiva': 'angry', 'zangada': 'angry', 'irritada': 'angry',
+        'motivacional': 'motivational', 'motivadora': 'motivational',
+        'esperançosa': 'hopeful', 'otimista': 'optimistic',
+        'sombria': 'dark', 'sombrio': 'dark', 'pesadelo': 'dark',
+        'assustadora': 'scary', 'terror': 'horror',
+        'épica': 'epic', 'épico': 'epic', 'grandiosa': 'epic',
+        'sensual': 'sensual', 'sexy': 'sexy', 'provocante': 'seductive',
+        'divertida': 'fun', 'engraçada': 'funny',
+        'emocional': 'emotional', 'emocionante': 'emotional',
+        'introspectiva': 'introspective', 'reflexiva': 'reflective',
+        'angustiante': 'anxious', 'ansiosa': 'anxious',
+        'pacífica': 'peaceful', 'serena': 'serene',
+        'eufórica': 'euphoric', 'extática': 'ecstatic',
+
+        // Activities
+        'treino': 'workout', 'malhar': 'workout', 'academia': 'gym',
+        'estudo': 'study', 'estudar': 'study', 'foco': 'focus',
+        'festa': 'party', 'dançar': 'dance', 'balada': 'party',
+        'dormir': 'sleep', 'relaxar': 'relax', 'meditação': 'meditation',
+        'trabalho': 'work', 'concentração': 'focus',
+        'corrida': 'running', 'correr': 'running',
+        'yoga': 'yoga', 'pilates': 'workout',
+        'dirigir': 'driving', 'road trip': 'road trip',
+        'jantar': 'dinner', 'cozinhar': 'cooking',
+        'leitura': 'reading', 'ler': 'reading',
+        'praia': 'beach', 'piscina': 'pool',
+        'churrasco': 'bbq', 'bar': 'bar',
+        'viagem': 'travel', 'viajar': 'travel',
+
+        // Times/Contexts
+        'noite': 'night', 'noturna': 'night', 'noturnas': 'night',
+        'dia': 'day', 'manhã': 'morning', 'madrugada': 'late night',
+        'tarde': 'afternoon', 'entardecer': 'sunset',
+        'verão': 'summer', 'inverno': 'winter',
+        'primavera': 'spring', 'outono': 'autumn',
+        'chuva': 'rainy', 'chuvoso': 'rainy', 'tempestade': 'storm',
+        'sol': 'sunny', 'ensolarado': 'sunny',
+        'fim de semana': 'weekend', 'sexta': 'friday',
+        'natal': 'christmas', 'ano novo': 'new year',
+
+        // Intensity/Style
+        'suave': 'soft', 'suaves': 'soft', 'delicada': 'gentle',
+        'pesada': 'heavy', 'pesadas': 'heavy', 'intenso': 'intense',
+        'rápida': 'fast', 'rápidas': 'fast', 'acelerada': 'fast',
+        'lenta': 'slow', 'lentas': 'slow', 'devagar': 'slow',
+        'barulhenta': 'loud', 'alta': 'loud',
+        'baixa': 'quiet', 'silenciosa': 'quiet',
+        'poderosa': 'powerful', 'forte': 'powerful',
+        'minimalista': 'minimal', 'simples': 'simple',
+        'complexa': 'complex', 'experimental': 'experimental',
+
+        // Genres/Vibes (Portuguese terms)
+        'sertanejo': 'sertanejo', 'forró': 'forro', 'bossa nova': 'bossa nova',
+        'mpb': 'mpb', 'samba': 'samba', 'pagode': 'pagode',
+        'funk': 'funk carioca', 'trap': 'trap', 'phonk': 'phonk',
+        'lofi': 'lofi', 'lo-fi': 'lofi', 'beats': 'beats',
+        'clássica': 'classical', 'clássico': 'classical',
+        'eletrônica': 'electronic', 'techno': 'techno',
+        'gospel': 'gospel', 'worship': 'worship',
+        'infantil': 'kids', 'criança': 'kids'
+    };
+
+    async parsePrompt(prompt) {
+        const lowerPrompt = prompt.toLowerCase().trim();
+        const trackPatterns = [
+            /(.+?)\s+by\s+(.+)/i,
+            /(.+?)\s+-\s+(.+)/,
+            /(.+?)\s+from\s+(.+)/i,
+        ];
+
+        for (const pattern of trackPatterns) {
+            const match = prompt.match(pattern);
+            if (match) {
+                return {
+                    type: 'track',
+                    value: prompt,
+                    track: match[1].trim(),
+                    artist: match[2].trim()
+                };
+            }
+        }
+
+        const genreKeywords = [
+            'rock', 'pop', 'jazz', 'indie', 'electronic', 'hip hop', 'hip-hop', 'rap',
+            'metal', 'folk', 'country', 'blues', 'reggae', 'punk', 'soul', 'funk',
+            'disco', 'house', 'techno', 'ambient', 'classical', 'edm', 'r&b', 'rnb',
+            'alternative', 'grunge', 'psychedelic', 'progressive', 'hardcore', 'ska',
+            'gospel', 'latin', 'world', 'experimental', 'noise', 'drone', 'shoegaze', 'instrumental'
+        ];
+
+        if (genreKeywords.some(genre => lowerPrompt.includes(genre))) {
+            return { type: 'genre', value: prompt };
+        }
+
+        // AUTO-DETECT: Try to search as song/artist first (priority)
+        try {
+            const trackSearch = await lastfmService.searchTrack(prompt, 3);
+            const trackResults = trackSearch.tracks || trackSearch;
+            if (trackResults.length > 0) {
+                const topTrack = trackResults[0];
+                const listeners = parseInt(topTrack.listeners || 0);
+                // If it's a popular track/artist (>100k listeners), it's NOT a mood keyword
+                if (listeners > 100000) {
+                    return {
+                        type: 'track',
+                        value: prompt,
+                        track: topTrack.name,
+                        artist: topTrack.artist?.name || topTrack.artist
+                    };
+                }
+            }
+        } catch (error) {
+            // Silent fail
+        }
+
+        // Check if prompt contains Portuguese mood keywords
+        let translatedMood = null;
+        for (const [ptWord, enWord] of Object.entries(this.moodTranslations)) {
+            if (lowerPrompt.includes(ptWord)) {
+                translatedMood = enWord;
+                console.log(`[ParsePrompt] Translated PT mood "${ptWord}" -> "${enWord}"`);
+                break;
+            }
+        }
+
+        if (translatedMood) {
+            return { type: 'genre', value: translatedMood };
+        }
+
+        return { type: 'artist', value: prompt };
+    }
+
     async getRecommendations(prompt, limit = 25) {
+        // Stop any playing preview when a new recommendation request starts
         try {
             usePreviewStore.getState().stopPreview();
-        } catch (e) {}
+        } catch (e) {
+            console.warn("Could not stop preview:", e);
+        }
 
         const parsed = await this.parsePrompt(prompt);
         const { type, value, track, artist } = parsed;
 
+        // --- SPOTIFY FIRST STRATEGY ---
+        if (spotifyService.isConnected()) {
+            try {
+                let seedArtists = [];
+                let seedTracks = [];
+                let seedGenres = [];
+
+                if (type === 'artist') {
+                    const found = await spotifyService.searchArtist(value);
+                    if (found) seedArtists.push(found.id);
+                } else if (type === 'track') {
+                    const query = track && artist ? `track:${track} artist:${artist}` : value;
+                    const found = await spotifyService.searchGeneral(query);
+                    if (found) seedTracks.push(found.id);
+                } else if (type === 'genre') {
+                    // Spotify genres must match exactly their list, so this is risky.
+                    // Fallback: search for a playlist/track of that genre or trust the user input if valid
+                    // For now, simpler to use search for a "genre" track/artist or fallback to Last.fm for pure genre
+                    seedGenres.push(value.toLowerCase().replace(/\s+/g, '-'));
+                }
+
+                if (seedArtists.length > 0 || seedTracks.length > 0 || seedGenres.length > 0) {
+                    console.log(`[Recs] Using Spotify API with seeds:`, { seedArtists, seedTracks, seedGenres });
+                    const spotifyRecs = await spotifyService.getRecommendations(seedArtists, seedTracks, seedGenres, limit);
+
+                    if (spotifyRecs.length > 0) {
+                        return spotifyRecs.map(t => ({
+                            id: t.id,
+                            name: t.name,
+                            artist: t.artists[0].name,
+                            album: t.album.name,
+                            imageUrl: t.album.images[0]?.url,
+                            uri: t.uri,
+                            spotifyUrl: t.external_urls.spotify,
+                            previewUrl: t.preview_url
+                        }));
+                    }
+                }
+            } catch (e) {
+                console.warn("Spotify Recommendations failed, falling back to Last.fm:", e);
+            }
+        }
+
+        // --- LAST.FM FALLBACK ---
         try {
             let lastfmTracks = [];
+            // ... (keep existing logic)
 
             if (type === 'artist') {
                 lastfmTracks = await this.getRecommendationsByArtist(value, limit);
@@ -125,94 +344,54 @@ class RecommendationService {
                     lastfmTracks = await this.getRecommendationsByTrackSearch(value, limit);
                 }
             } else if (type === 'genre') {
+                // BR GENRE OVERRIDE: Use curated Artist Seeds to avoid generic/international tag issues
                 const lowerValue = value.toLowerCase();
                 const BR_GENRE_SEEDS = {
-                    'funk carioca': ['Anitta', 'Ludmilla', 'MC Kevin o Chris', 'Dennis DJ', 'Pedro Sampaio'],
-                    'sertanejo': ['Jorge & Mateus', 'Gusttavo Lima', 'Marília Mendonça', 'Henrique & Juliano'],
-                    'pagode': ['Sorriso Maroto', 'Thiaguinho', 'Menos é Mais', 'Ferrugem']
+                    'funk carioca': ['Anitta', 'Ludmilla', 'MC Kevin o Chris', 'Dennis DJ', 'Pedro Sampaio', 'MC Hariel']
                 };
 
                 if (BR_GENRE_SEEDS[lowerValue]) {
                     const seeds = BR_GENRE_SEEDS[lowerValue];
                     const randomSeed = seeds[Math.floor(Math.random() * seeds.length)];
+                    console.log(`[Genre Override] '${value}' ambiguous -> Using seed artist: ${randomSeed}`);
                     lastfmTracks = await this.getRecommendationsByArtist(randomSeed, limit);
                 } else {
                     lastfmTracks = await this.getRecommendationsByGenre(value, limit);
                 }
             }
 
-            // 1. Enriquece as Faixas (Capa, Preview)
-            const enrichedTracks = await this.enrichTracks(lastfmTracks);
-
-            // 2. Extrai Artistas Únicos das faixas recomendadas
-            const uniqueArtistsMap = new Map();
-            enrichedTracks.forEach(t => {
-                if (t.artist && !uniqueArtistsMap.has(t.artist)) {
-                    uniqueArtistsMap.set(t.artist, {
-                        name: t.artist,
-                        reason: `Similares a ${value}`
-                    });
-                }
-            });
-            
-            // MUDANÇA 2: Pega artistas baseados no Top 10 e os embaralha
-            const rawArtists = this.shuffleArray(Array.from(uniqueArtistsMap.values())).slice(0, 10);
-            const enrichedArtists = await this.enrichArtists(rawArtists);
-
-            // 3. Aplica SMART SHUFFLE nas faixas para evitar artistas repetidos em sequência
-            const finalTracks = this.smartShuffle(enrichedTracks);
-
-            return {
-                tracks: finalTracks,
-                artists: enrichedArtists,
-                albums: [] 
-            };
-
+            const enrichedTracks = await this.enrichWithSpotify(lastfmTracks);
+            return enrichedTracks;
         } catch (error) {
-            console.error('Erro ao buscar recomendações algorítmicas:', error);
+            console.error('Error getting recommendations:', error);
             throw error;
         }
     }
 
-    // --- LÓGICA DE PARSEAMENTO (Mantida) ---
-    async parsePrompt(prompt) {
-        const lowerPrompt = prompt.toLowerCase().trim();
-        const trackPatterns = [
-            /(.+?)\s+by\s+(.+)/i,
-            /(.+?)\s+-\s+(.+)/,
-            /(.+?)\s+de\s+(.+)/i, 
-        ];
+    // Helper para buscar "Deep Cuts" (faixas do fundo do baú) quando faltam recomendações
+    async getDeepCuts(artistName, limit) {
+        try {
+            const similarArtists = await lastfmService.getSimilarArtists(artistName, 50);
+            const selectedArtists = this.shuffleArray(similarArtists).slice(0, 8); // Aumentado para 8 artistas
 
-        for (const pattern of trackPatterns) {
-            const match = prompt.match(pattern);
-            if (match) {
-                return { type: 'track', value: prompt, track: match[1].trim(), artist: match[2].trim() };
-            }
+            const promises = selectedArtists.map(async (artist) => {
+                // DEEP DIVE EXTREMO: Páginas 10 a 25
+                const randomPage = Math.floor(Math.random() * 16) + 10;
+                const tracks = await lastfmService.getTopTracksByArtist(artist.name, 20, randomPage);
+                return this.shuffleArray(tracks).slice(0, 5);
+            });
+
+            return (await Promise.all(promises)).flat();
+        } catch (e) {
+            return [];
         }
-
-        const genreKeywords = [ 'rock', 'pop', 'jazz', 'indie', 'metal', 'sertanejo', 'funk', 'pagode' ]; // (Simplificado para brevidade)
-        if (genreKeywords.some(genre => lowerPrompt.includes(genre))) {
-            return { type: 'genre', value: prompt };
-        }
-
-        let translatedMood = null;
-        for (const [ptWord, enWord] of Object.entries(this.moodTranslations)) {
-            if (lowerPrompt.includes(ptWord)) {
-                translatedMood = enWord;
-                break;
-            }
-        }
-        if (translatedMood) return { type: 'genre', value: translatedMood };
-
-        return { type: 'artist', value: prompt };
     }
-
-    // --- ESTRATÉGIAS DE RECOMENDAÇÃO ---
 
     async getRecommendationsByArtist(artistName, limit) {
         const normSearchArtist = this.normalizeString(artistName);
-        
-        // Busca 60 similares para ter um pool grande
+
+        // 1. Estratégia 100% Similares (Sem Tags)
+        // Aumentado pool para 60 para ter mais variedade e evitar repetições
         const similarArtists = await lastfmService.getSimilarArtists(artistName, 60);
 
         const filteredSimilar = similarArtists.filter(a => {
@@ -220,160 +399,276 @@ class RecommendationService {
             return norm !== normSearchArtist && !norm.includes(normSearchArtist);
         });
 
-        // Seleciona 15 artistas aleatórios do pool (antes era menos)
-        const selectedArtists = this.shuffleArray(filteredSimilar).slice(0, 15);
+        // Selecionar 20 artistas aleatórios (mais fontes = menos chance de faltar música)
+        const selectedArtists = this.shuffleArray(filteredSimilar).slice(0, 20);
 
         const promises = selectedArtists.map(async (artist) => {
-            const randomPage = Math.floor(Math.random() * 5) + 1;
-            // Pega apenas 2 faixas por artista para forçar variedade
-            const tracks = await lastfmService.getTopTracksByArtist(artist.name, 5, randomPage);
-            return this.shuffleArray(tracks).slice(0, 2);
+            // RANGE FIXO: Páginas 2 a 10 (Variedade garantida sem lógica progressiva complexa)
+            const minPage = 2;
+            const maxPage = 10;
+            const randomPage = Math.floor(Math.random() * (maxPage - minPage + 1)) + minPage;
+
+            const tracks = await lastfmService.getTopTracksByArtist(artist.name, 20, randomPage);
+            // Pegar até 3 faixas por artista inicialmente
+            return this.shuffleArray(tracks).slice(0, 3);
         });
 
         const similarTracks = (await Promise.all(promises)).flat();
-        return this.processAndFilterTracks(similarTracks, normSearchArtist, limit, artistName);
-    }
-    
-    // ... (getRecommendationsByTrack, getRecommendationsByTrackSearch, getRecommendationsByGenre mantidos iguais) ...
-    async getRecommendationsByTrack(trackName, artistName, limit) {
-        try {
-            const normSearchArtist = this.normalizeString(artistName);
-            const similarTracks = await lastfmService.getSimilarTracks(trackName, artistName, 60);
-            return await this.processAndFilterTracks(similarTracks, normSearchArtist, limit, artistName);
-        } catch (error) { return this.getRecommendationsByArtist(artistName, limit); }
-    }
 
-    async getRecommendationsByTrackSearch(trackQuery, limit) {
-        const searchData = await lastfmService.searchTrack(trackQuery, 1);
-        if (searchData.tracks && searchData.tracks.length > 0) {
-            const mainTrack = searchData.tracks[0];
-            return this.getRecommendationsByTrack(mainTrack.name, mainTrack.artist?.name || mainTrack.artist, limit);
-        }
-        return this.getRecommendationsByArtist(trackQuery, limit);
-    }
-
-    async getRecommendationsByGenre(genre, limit) {
-        const randomPage = Math.floor(Math.random() * 5) + 1;
-        const topTracks = await lastfmService.getTopTracksByTag(genre, 100, randomPage);
-        return this.shuffleArray(topTracks).slice(0, limit);
-    }
-
-    async processAndFilterTracks(tracks, normSearchArtist, limit, seedArtistName) {
-        let filteredTracks = tracks.filter(track => {
+        // 2. Filtragem Final
+        let filteredTracks = similarTracks.filter(track => {
             const trackName = track.name.toLowerCase();
             const trackArtistName = track.artist?.name || track.artist || '';
             const normTrackArtist = this.normalizeString(trackArtistName);
             const uniqueId = `${trackName}_${normTrackArtist}`;
+
             const isSame = normTrackArtist === normSearchArtist;
-            
-            if (isSame) return false;
+            const contains = normTrackArtist.includes(normSearchArtist) || (normSearchArtist.length > 3 && normSearchArtist.includes(normTrackArtist));
+
+            if (isSame || contains) return false;
             if (this.seenTracks.has(uniqueId)) return false;
 
             return true;
         });
 
+        // 3. BACKFILL LOGIC: Se faltar música, buscar Deep Cuts
         if (filteredTracks.length < limit) {
             const missing = limit - filteredTracks.length;
-            const deepCuts = await this.getDeepCuts(seedArtistName, missing * 3);
-            filteredTracks = [...filteredTracks, ...deepCuts];
+            // Pedir o triplo do que falta para garantir após filtragem
+            const deepCuts = await this.getDeepCuts(artistName, missing * 3);
+
+            const validDeepCuts = deepCuts.filter(track => {
+                const uniqueId = `${track.name.toLowerCase()}_${this.normalizeString(track.artist?.name || track.artist)}`;
+                return !this.seenTracks.has(uniqueId);
+            });
+
+            filteredTracks = [...filteredTracks, ...validDeepCuts];
         }
 
         const uniqueTracks = this.deduplicateTracks(filteredTracks);
-        // Filtro de diversidade: Max 2 músicas por artista no total
+        // Permitir até 2 músicas do mesmo artista
         const diverseTracks = this.applyDiversityFilter(uniqueTracks, 2);
-        
-        // MUDANÇA: Retornamos tudo aqui, o corte (slice) e o shuffle final são feitos no método principal
-        return diverseTracks; 
+        const finalShuffled = this.shuffleArray(diverseTracks);
+
+        // Registrar faixas mostradas na sessão
+        const selected = finalShuffled.slice(0, limit);
+        selected.forEach(track => {
+            const uniqueId = `${track.name.toLowerCase()}_${this.normalizeString(track.artist?.name || track.artist)}`;
+            this.seenTracks.add(uniqueId);
+        });
+
+        return selected;
     }
 
-    async getDeepCuts(artistName, limit) {
+    async getRecommendationsByTrack(trackName, artistName, limit) {
         try {
-            const similarArtists = await lastfmService.getSimilarArtists(artistName, 40);
-            const selectedArtists = this.shuffleArray(similarArtists).slice(0, 10); // Top 10 similares para deep cuts
+            const normSearchArtist = this.normalizeString(artistName);
 
-            const promises = selectedArtists.map(async (artist) => {
-                const randomPage = Math.floor(Math.random() * 10) + 10;
-                const tracks = await lastfmService.getTopTracksByArtist(artist.name, 10, randomPage);
-                return this.shuffleArray(tracks).slice(0, 2);
+            // 1. Estratégia 100% Tracks Similares (Sem Tags)
+            const similarTracks = await lastfmService.getSimilarTracks(trackName, artistName, 60);
+
+            // Filtros
+            let filteredTracks = similarTracks.filter(track => {
+                const trackName = track.name.toLowerCase();
+                const trackArtistName = track.artist?.name || track.artist || '';
+                const normTrackArtist = this.normalizeString(trackArtistName);
+                const uniqueId = `${trackName}_${normTrackArtist}`;
+
+                if (normTrackArtist === normSearchArtist || normTrackArtist.includes(normSearchArtist)) return false;
+                if (this.seenTracks.has(uniqueId)) return false;
+
+                return true;
             });
 
-            return (await Promise.all(promises)).flat();
-        } catch (e) { return []; }
+            // BACKFILL LOGIC
+            if (filteredTracks.length < limit) {
+                const missing = limit - filteredTracks.length;
+                const deepCuts = await this.getDeepCuts(artistName, missing * 3);
+                const validDeepCuts = deepCuts.filter(track => {
+                    const uniqueId = `${track.name.toLowerCase()}_${this.normalizeString(track.artist?.name || track.artist)}`;
+                    return !this.seenTracks.has(uniqueId);
+                });
+                filteredTracks = [...filteredTracks, ...validDeepCuts];
+            }
+
+            const uniqueTracks = this.deduplicateTracks(filteredTracks);
+            // Permitir até 2 músicas do mesmo artista
+            const diverseTracks = this.applyDiversityFilter(uniqueTracks, 2);
+            const finalShuffled = this.shuffleArray(diverseTracks);
+
+            const selected = finalShuffled.slice(0, limit);
+            selected.forEach(track => {
+                const uniqueId = `${track.name.toLowerCase()}_${this.normalizeString(track.artist?.name || track.artist)}`;
+                this.seenTracks.add(uniqueId);
+            });
+
+            return selected;
+
+        } catch (error) {
+            console.error('Error getting similar tracks:', error);
+            return this.getRecommendationsByArtist(artistName, limit);
+        }
     }
 
-    // --- ENRIQUECIMENTO DE DADOS (Tracks e Artistas) ---
+    async getRecommendationsByTrackSearch(trackQuery, limit) {
+        try {
+            const searchData = await lastfmService.searchTrack(trackQuery, 5);
+            const searchResults = searchData.tracks || searchData;
+            if (searchResults.length === 0) {
+                return this.getRecommendationsByArtist(trackQuery, limit);
+            }
+            const mainTrack = searchResults[0];
+            return this.getRecommendationsByTrack(
+                mainTrack.name,
+                mainTrack.artist?.name || mainTrack.artist,
+                limit
+            );
+        } catch (error) {
+            console.error('Error in track search:', error);
+            return this.getRecommendationsByArtist(trackQuery, limit);
+        }
+    }
 
-    async enrichTracks(tracks) {
+    async getRecommendationsByGenre(genre, limit) {
+        // Buscar 100 faixas do gênero para ter bastante variedade no shuffle
+        // Range aleatório 1-5
+        const randomPage = Math.floor(Math.random() * 5) + 1;
+        const topTracks = await lastfmService.getTopTracksByTag(genre, 100, randomPage);
+        const shuffled = this.shuffleArray(topTracks);
+        return shuffled.slice(0, limit);
+    }
+
+    getLastFmImage(track) {
+        if (!track.image || !Array.isArray(track.image)) return null;
+
+        const sizes = ['extralarge', 'large', 'medium', 'small'];
+        for (const size of sizes) {
+            const img = track.image.find(i => i.size === size);
+            if (img && img['#text']) {
+                const url = img['#text'];
+                // Ignorar placeholder cinza do Last.fm
+                if (url.includes('2a96cbd8b46e442fc41c2b86b821562f')) return null;
+                return url;
+            }
+        }
+        return null;
+    }
+
+    async enrichWithSpotify(lastfmTracks) {
         const enrichedTracks = [];
         const BATCH_SIZE = 5;
 
-        for (let i = 0; i < tracks.length; i += BATCH_SIZE) {
-            const batch = tracks.slice(i, i + BATCH_SIZE);
+        // Processar em lotes de 5 para ser mais rápido que sequencial, mas seguro
+        for (let i = 0; i < lastfmTracks.length; i += BATCH_SIZE) {
+            const batch = lastfmTracks.slice(i, i + BATCH_SIZE);
 
             const batchPromises = batch.map(async (track) => {
-                const artistName = track.artist?.name || track.artist || '';
-                const trackName = track.name;
-                const cleanName = this.cleanTrackName(trackName);
-
                 const baseTrack = {
-                    id: `${trackName}_${artistName}`.replace(/\s/g, '_').toLowerCase(),
-                    name: trackName,
-                    artist: artistName,
+                    id: `${track.name}_${track.artist?.name || track.artist}`.replace(/\s/g, '_'),
+                    name: track.name,
+                    artist: track.artist?.name || track.artist,
                     album: track.album || 'Unknown Album',
-                    imageUrl: null,
+                    imageUrl: this.getLastFmImage(track) || '/default-album.png',
+                    listeners: parseInt(track.listeners || track.playcount || 0),
                     previewUrl: null,
-                    reason: track.reason || ''
+                    reason: track.reason // PRESERVE THE AI REASON HERE
                 };
 
-                // 1. TENTA ITUNES (Geralmente tem as melhores capas quadradas e previews)
-                try {
-                    const itunesData = await itunesService.searchTrack(cleanName, artistName);
-                    if (itunesData) {
-                        return {
-                            ...baseTrack,
-                            id: `itunes_${itunesData.id}`,
-                            name: itunesData.name,
-                            artist: itunesData.artist,
-                            album: itunesData.album,
-                            imageUrl: itunesData.imageUrl, // 600x600
-                            previewUrl: itunesData.previewUrl,
-                            externalUrl: itunesData.externalUrl
-                        };
-                    }
-                } catch (e) {}
+                let finalTrack = baseTrack;
+                const cleanName = this.cleanTrackName(baseTrack.name);
 
-                // 2. TENTA DEEZER (Fallback forte)
+                // --- STRATEGY 1: SPOTIFY (Strict & Fuzzy) ---
                 try {
-                    const deezerData = await deezerService.searchTrack(cleanName, artistName);
-                    if (deezerData) {
-                        return {
-                            ...baseTrack,
-                            id: `deezer_${deezerData.id}`,
-                            name: deezerData.title,
-                            album: deezerData.album?.title,
-                            imageUrl: deezerData.album?.cover_xl || deezerData.album?.cover_medium,
-                            previewUrl: deezerData.preview,
-                            externalUrl: deezerData.link
-                        };
-                    }
-                } catch (e) {}
+                    // 1.1 Strict Search (Clean Name)
+                    console.log(`[Enrich] Searching for: ${cleanName} - ${baseTrack.artist}`);
+                    let spotifyTrack = await spotifyService.searchTrack(cleanName, baseTrack.artist);
 
-                return baseTrack;
+                    // 1.2 Strict Search (Original Name) - if clean failed
+                    if (!spotifyTrack && cleanName !== baseTrack.name) {
+                        spotifyTrack = await spotifyService.searchTrack(baseTrack.name, baseTrack.artist);
+                    }
+
+                    // 1.3 General Fuzzy Search (Artist + Clean Name) - if strict failed
+                    if (!spotifyTrack) {
+                        const fuzzyQuery = `${baseTrack.artist} ${cleanName}`;
+                        spotifyTrack = await spotifyService.searchGeneral(fuzzyQuery);
+
+                        // Verify if the fuzzy result is actually from the correct artist
+                        if (spotifyTrack) {
+                            const spotifyArtist = spotifyTrack.artists[0].name.toLowerCase();
+                            const originalArtist = baseTrack.artist.toLowerCase();
+                            // Simple inclusion check to avoid bad matches
+                            if (!spotifyArtist.includes(originalArtist) && !originalArtist.includes(spotifyArtist)) {
+                                spotifyTrack = null;
+                            }
+                        }
+                    }
+
+                    if (spotifyTrack) {
+                        baseTrack.previewUrl = spotifyTrack.preview_url;
+
+                        const token = spotifyService.getToken();
+                        if (token) {
+                            finalTrack = {
+                                ...baseTrack,
+                                id: spotifyTrack.id,
+                                imageUrl: spotifyTrack.album?.images?.[0]?.url || baseTrack.imageUrl,
+                                uri: spotifyTrack.uri,
+                                spotifyUrl: spotifyTrack.external_urls?.spotify,
+                                album: spotifyTrack.album?.name || baseTrack.album
+                            };
+                        }
+                    }
+                } catch (error) {
+                    // Silent fail
+                }
+
+                // --- STRATEGY 2: ITUNES (Fallback for Previews/Covers) ---
+                if (!finalTrack.previewUrl || finalTrack.imageUrl === '/default-album.png') {
+                    try {
+                        const itunesTrack = await itunesService.searchTrack(cleanName, baseTrack.artist);
+                        if (itunesTrack) {
+                            if (!finalTrack.previewUrl) finalTrack.previewUrl = itunesTrack.previewUrl;
+                            if (finalTrack.imageUrl === '/default-album.png') finalTrack.imageUrl = itunesTrack.imageUrl;
+                            if (finalTrack.album === 'Unknown Album') finalTrack.album = itunesTrack.album;
+                        }
+                    } catch (e) {
+                        // Silent fail
+                    }
+                }
+
+                // --- STRATEGY 3: DEEZER (Last Resort) ---
+                if (!finalTrack.previewUrl || finalTrack.imageUrl === '/default-album.png') {
+                    try {
+                        let deezerTrack = await deezerService.searchTrack(cleanName, baseTrack.artist);
+                        if (deezerTrack) {
+                            if (!finalTrack.previewUrl) finalTrack.previewUrl = deezerTrack.preview;
+                            if (finalTrack.album === 'Unknown Album' && deezerTrack.album) finalTrack.album = deezerTrack.album.title;
+                            if (finalTrack.imageUrl === '/default-album.png' && deezerTrack.album) {
+                                finalTrack.imageUrl = deezerTrack.album.cover_xl || deezerTrack.album.cover_medium;
+                            }
+                        }
+                    } catch (e) {
+                        // Silent fail
+                    }
+                }
+
+                return finalTrack;
             });
 
             const processedBatch = await Promise.all(batchPromises);
             enrichedTracks.push(...processedBatch);
 
-            if (i + BATCH_SIZE < tracks.length) {
+            // Pequeno delay entre lotes se houver mais
+            if (i + BATCH_SIZE < lastfmTracks.length) {
                 await new Promise(r => setTimeout(r, 100));
             }
         }
+
         return enrichedTracks;
     }
 
     async enrichArtists(artists) {
-        if (!artists || !Array.isArray(artists)) return [];
-        
         const enrichedArtists = [];
         const BATCH_SIZE = 5;
 
@@ -381,28 +676,45 @@ class RecommendationService {
             const batch = artists.slice(i, i + BATCH_SIZE);
 
             const batchPromises = batch.map(async (artist) => {
-                // Validação de imagem existente
-                const hasValidImage = artist.image && 
-                                      !artist.image.includes('2a96cbd8b46e442fc41c2b86b821562f') && 
-                                      !JSON.stringify(artist.image).includes('#text');
-
-                if (artist.imageUrl || hasValidImage) {
+                // If we already have a good image, keep it
+                if (artist.image && !artist.image.includes('2a96cbd8b46e442fc41c2b86b821562f')) {
                     return artist;
                 }
 
-                // Busca Centralizada (Spotify > Deezer > iTunes)
-                const newImageUrl = await imageService.getArtistImage(artist.name);
+                let imageUrl = null;
+
+                // 1. Try Spotify
+                try {
+                    const spotifyArtist = await spotifyService.searchArtist(artist.name);
+                    if (spotifyArtist && spotifyArtist.images?.length > 0) {
+                        imageUrl = spotifyArtist.images[0].url;
+                    }
+                } catch (e) {
+                    console.warn(`[Enrich] Spotify artist search failed for ${artist.name}`, e);
+                }
+
+                // 2. Try iTunes (Fallback - getting top album art)
+                if (!imageUrl) {
+                    try {
+                        // Search for a track by this artist to get album art
+                        const itunesTrack = await itunesService.searchTrack('', artist.name);
+                        if (itunesTrack && itunesTrack.imageUrl) {
+                            imageUrl = itunesTrack.imageUrl;
+                        }
+                    } catch (e) {
+                        // Silent fail
+                    }
+                }
 
                 return {
                     ...artist,
-                    image: newImageUrl || artist.image || null,
-                    imageUrl: newImageUrl || null
+                    image: imageUrl || artist.image // Fallback to original (even if placeholder) if all else fails
                 };
             });
 
-            const results = await Promise.all(batchPromises);
-            enrichedArtists.push(...results);
-            
+            const processedBatch = await Promise.all(batchPromises);
+            enrichedArtists.push(...processedBatch);
+
             if (i + BATCH_SIZE < artists.length) {
                 await new Promise(r => setTimeout(r, 100));
             }
@@ -411,85 +723,10 @@ class RecommendationService {
         return enrichedArtists;
     }
 
-    // --- UTILITÁRIOS ---
-
-    // MUDANÇA 3: SMART SHUFFLE (Evita artistas repetidos em sequência)
-    smartShuffle(tracks) {
-        if (!tracks || tracks.length === 0) return [];
-        
-        // 1. Agrupa tracks por artista
-        const tracksByArtist = {};
-        tracks.forEach(t => {
-            const artist = (t.artist || '').toLowerCase();
-            if (!tracksByArtist[artist]) tracksByArtist[artist] = [];
-            tracksByArtist[artist].push(t);
-        });
-
-        // 2. Ordena artistas por quem tem mais músicas (para distribuir os mais frequentes primeiro)
-        const sortedArtists = Object.keys(tracksByArtist).sort((a, b) => 
-            tracksByArtist[b].length - tracksByArtist[a].length
-        );
-
-        const result = [];
-        let lastArtist = null;
-
-        // 3. Loop de distribuição
-        while (result.length < tracks.length) {
-            let added = false;
-
-            for (let i = 0; i < sortedArtists.length; i++) {
-                const artist = sortedArtists[i];
-                const artistTracks = tracksByArtist[artist];
-
-                if (artistTracks.length > 0) {
-                    // Tenta não repetir o último artista
-                    if (artist !== lastArtist) {
-                        result.push(artistTracks.shift());
-                        lastArtist = artist;
-                        added = true;
-                        
-                        // Move este artista para o fim da fila de prioridade momentaneamente? 
-                        // Não, apenas continua o loop. O loop externo garante que voltamos ao topo.
-                        break; 
-                    }
-                }
-            }
-
-            // Fallback: Se não conseguimos adicionar ninguém diferente (ex: sobrou só 1 artista), adiciona ele mesmo
-            if (!added) {
-                for (let i = 0; i < sortedArtists.length; i++) {
-                    const artist = sortedArtists[i];
-                    if (tracksByArtist[artist].length > 0) {
-                        result.push(tracksByArtist[artist].shift());
-                        lastArtist = artist;
-                        break;
-                    }
-                }
-            }
-        }
-
-        return result;
-    }
-
-    cleanTrackName(name) {
-        if (!name) return '';
-        let cleaned = name;
-        cleaned = cleaned.replace(/\s(prod\.|feat\.|ft\.|with).*/gi, '');
-        cleaned = cleaned.replace(/\[.*?\]/g, '');
-        cleaned = cleaned.replace(/\(.*?\)/g, '');
-        cleaned = cleaned.replace(/\d{2}\.\d{2}\.\d{4}/g, '');
-        cleaned = cleaned.replace(/\s+-\s+.*$/, '');
-        return cleaned.replace(/\s+/g, ' ').trim();
-    }
-
-    normalizeString(str) {
-        if (!str) return '';
-        return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-    }
-
     deduplicateTracks(tracks) {
         const seen = new Map();
         const unique = [];
+
         for (const track of tracks) {
             const key = `${track.name.toLowerCase().trim()}_${(track.artist?.name || track.artist || '').toLowerCase().trim()}`;
             if (!seen.has(key)) {
@@ -497,21 +734,38 @@ class RecommendationService {
                 unique.push(track);
             }
         }
+
         return unique;
     }
 
     applyDiversityFilter(tracks, maxPerArtist = 2) {
         const artistCounts = {};
-        const result = [];
+        const firstPass = [];
+        const secondPass = [];
+
         for (const track of tracks) {
             const artist = (track.artist?.name || track.artist || '').toLowerCase().trim();
             const count = artistCounts[artist] || 0;
+
             if (count < maxPerArtist) {
                 artistCounts[artist] = count + 1;
-                result.push(track);
+                firstPass.push(track);
+            } else {
+                secondPass.push(track);
             }
         }
-        return result;
+
+        for (const track of secondPass) {
+            const artist = (track.artist?.name || track.artist || '').toLowerCase().trim();
+            const count = artistCounts[artist] || 0;
+
+            if (count < maxPerArtist + 1) {
+                artistCounts[artist] = count + 1;
+                firstPass.push(track);
+            }
+        }
+
+        return firstPass;
     }
 
     shuffleArray(array) {
@@ -521,6 +775,113 @@ class RecommendationService {
             [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
         }
         return shuffled;
+    }
+
+    async getPersonalizedRecommendations(listeningHistory, limit = 50) {
+        try {
+            const topArtists = listeningHistory.getTopArtists(5);
+            const allRecommendations = [];
+
+            for (const artist of topArtists) {
+                const recs = await this.getRecommendationsByArtist(artist.name, 15);
+                allRecommendations.push(...recs);
+            }
+
+            const unique = this.deduplicateTracks(allRecommendations);
+            const diverseRecommendations = this.applyDiversityFilter(unique, 3);
+            const shuffled = this.shuffleArray(diverseRecommendations);
+            const selected = shuffled.slice(0, limit);
+
+            return await this.enrichWithSpotify(selected);
+        } catch (error) {
+            console.error('Error getting personalized recommendations:', error);
+        }
+    }
+
+    async getRecommendationsBasedOnRecentTopArtists(user, limit = 50) {
+        try {
+            // 1. Get Top Artists (Spotify Priority)
+            let topArtists = [];
+
+            if (spotifyService.isConnected()) {
+                const spotifyTop = await spotifyService.getTopArtists(5, 'short_term');
+                topArtists = spotifyTop.map(a => ({ name: a.name, id: a.id }));
+            } else if (user) {
+                topArtists = await lastfmService.getTopArtists(user, 5, '7day');
+            }
+
+            if (topArtists.length === 0) return [];
+
+            // If we have Spotify IDs, we can use Spotify Recs directly
+            if (spotifyService.isConnected() && topArtists[0].id) {
+                const seedArtists = topArtists.slice(0, 5).map(a => a.id);
+                const spotifyRecs = await spotifyService.getRecommendations(seedArtists, [], [], limit);
+                return spotifyRecs.map(t => ({
+                    id: t.id,
+                    name: t.name,
+                    artist: t.artists[0].name,
+                    album: t.album.name,
+                    imageUrl: t.album.images[0]?.url,
+                    uri: t.uri,
+                    spotifyUrl: t.external_urls.spotify,
+                    previewUrl: t.preview_url
+                }));
+            }
+
+            // Fallback to Last.fm Similarity Graph
+            const allTracks = [];
+            const seenArtists = new Set(topArtists.map(a => a.name.toLowerCase()));
+
+            // 2. For each top artist, get similar artists
+            const promises = topArtists.map(async (artist) => {
+                try {
+                    // Get 3 similar artists
+                    const similarArtists = await lastfmService.getSimilarArtists(artist.name, 3);
+
+                    // Filter out artists we already know (the top ones)
+                    const newSimilar = similarArtists.filter(sim => !seenArtists.has(sim.name.toLowerCase()));
+
+                    // 3. Get top tracks for these similar artists
+                    const trackPromises = newSimilar.map(async (sim) => {
+                        // Get top 5 tracks for each similar artist
+                        const tracks = await lastfmService.getTopTracksByArtist(sim.name, 5);
+                        return tracks;
+                    });
+
+                    const tracks = await Promise.all(trackPromises);
+                    return tracks.flat();
+                } catch (e) {
+                    console.error(`Error processing artist ${artist.name}:`, e);
+                    return [];
+                }
+            });
+
+            const results = await Promise.all(promises);
+            const combined = results.flat();
+
+            // 4. Deduplicate and Shuffle
+            const unique = this.deduplicateTracks(combined);
+            const diverse = this.applyDiversityFilter(unique, 2);
+            const shuffled = this.shuffleArray(diverse);
+            const selected = shuffled.slice(0, limit);
+
+            // 5. Enrich with Spotify
+            return await this.enrichWithSpotify(selected);
+
+        } catch (error) {
+            console.error('Error getting recent recommendations:', error);
+            return [];
+        }
+    }
+
+    async searchAndEnrich(query, limit = 25) {
+        try {
+            const results = await lastfmService.searchTrack(query, limit);
+            return await this.enrichWithSpotify(results.tracks || []);
+        } catch (error) {
+            console.error('Error in searchAndEnrich:', error);
+            return [];
+        }
     }
 }
 
