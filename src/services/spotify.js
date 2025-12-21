@@ -57,6 +57,8 @@ class SpotifyService {
         // Store verifier for the callback step
         localStorage.setItem('spotify_code_verifier', codeVerifier);
         sessionStorage.setItem('spotify_code_verifier', codeVerifier);
+        // Also drop a short-lived cookie in case storage is wiped by privacy settings
+        document.cookie = `spotify_code_verifier=${codeVerifier}; path=/; max-age=600; SameSite=Lax`;
 
         const params = new URLSearchParams({
             client_id: this.clientId,
@@ -109,11 +111,23 @@ class SpotifyService {
             }
         }
 
+        // Fallback to cookie if both storage and state failed (privacy modes)
+        if (!codeVerifier) {
+            const cookieMatch = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('spotify_code_verifier='));
+            if (cookieMatch) {
+                codeVerifier = cookieMatch.split('=')[1];
+                localStorage.setItem('spotify_code_verifier', codeVerifier);
+                sessionStorage.setItem('spotify_code_verifier', codeVerifier);
+            }
+        }
+
         console.log('[Spotify] Code:', code ? 'Present' : 'Missing');
         console.log('[Spotify] Verifier:', codeVerifier ? 'Present' : 'Missing');
         
         if (!codeVerifier) {
             console.error('[Spotify] No code verifier found in localStorage!');
+            const stateInUrl = params.get('state');
+            console.warn('[Spotify] State param:', stateInUrl ? 'Present' : 'Missing');
             return null;
         }
 
@@ -203,6 +217,7 @@ class SpotifyService {
         localStorage.removeItem('spotify_refresh_token');
         localStorage.removeItem('spotify_code_verifier');
         sessionStorage.removeItem('spotify_code_verifier');
+        document.cookie = 'spotify_code_verifier=; Max-Age=0; path=/; SameSite=Lax';
     }
 
     // Check if Spotify is connected with a valid token
