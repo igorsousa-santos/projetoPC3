@@ -50,7 +50,7 @@ function GeneratePlaylist() {
             // }
 
             console.log('[GeneratePlaylist] Cache miss. Generating...');
-            const tracks = await recommendationService.getAIRecommendations(prompt);
+            const { tracks = [], artists = [], albums = [] } = await recommendationService.getAIRecommendations(prompt);
             setGeneratedTracks(tracks);
 
             // Suggest a name based on the prompt
