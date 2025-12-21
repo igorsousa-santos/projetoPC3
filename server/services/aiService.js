@@ -224,7 +224,7 @@ async function generateTracksFromGemini(prompt, limit, contextStr, attemptNumber
 
     try {
         const response = await genAI.models.generateContent({
-            model: 'gemini-2.0-flash-exp',
+            model: 'gemini-flash-lite-latest',
             config: {
                 responseMimeType: 'application/json',
                 responseSchema: {
@@ -336,7 +336,7 @@ export const analyzeTaste = async ({ topArtists = [], topTracks = [] }) => {
     const artistsStr = topArtists.slice(0, 15).map((a) => a.name).join(', ');
 
     const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-exp',
+        model: 'gemini-flash-lite-latest',
         config: {
             responseMimeType: 'application/json',
             responseSchema: {
@@ -370,7 +370,7 @@ export const describePlaylist = async ({ name, tracks = [] }) => {
     const tracksStr = tracks.slice(0, 20).map(t => `${t.name} by ${t.artist}`).join(', ');
 
     const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-exp',
+        model: 'gemini-flash-lite-latest',
         contents: [{
             role: 'user',
             parts: [{
