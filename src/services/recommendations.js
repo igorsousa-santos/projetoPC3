@@ -18,7 +18,22 @@ class RecommendationService {
         try {
             const context = await this.gatherUserContext(contextArtists);
 
+            const safePromptPreview = String(prompt || '').trim().slice(0, 80);
+            console.debug('[RecService] Calling AI generateRecommendations', {
+                limit,
+                promptPreview: safePromptPreview,
+                promptLength: String(prompt || '').length,
+                contextTopArtists: Array.isArray(context?.topArtists) ? context.topArtists.length : 0,
+            });
+
             const res = await aiAPI.generateRecommendations(prompt, limit, context);
+
+            console.debug('[RecService] AI generateRecommendations response', {
+                success: res?.success,
+                hasData: Boolean(res?.data),
+                dataType: Array.isArray(res?.data) ? 'array' : typeof res?.data,
+                message: res?.message,
+            });
             
             if (res.success && res.data) {
                 let result = { tracks: [], artists: [], albums: [] };

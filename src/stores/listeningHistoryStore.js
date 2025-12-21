@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import { createMapSetJSONStorage } from './persistStorage';
+
 import spotifyService from '../services/spotify';
 import lastfmService from '../services/lastfm';
 import useAuthStore from './authStore';
@@ -206,6 +208,7 @@ const useListeningHistoryStore = create(
             // Get top artists
             getTopArtists: (limit = 5) => {
                 const topArtists = get().stats.topArtists;
+                if (!(topArtists instanceof Map)) return [];
                 return Array.from(topArtists.entries())
                     .sort((a, b) => b[1] - a[1])
                     .slice(0, limit)
@@ -251,34 +254,42 @@ const useListeningHistoryStore = create(
         }),
         {
             name: 'music-horizon-listening-history',
-            // Custom serializer to handle Map and Set
-            serialize: (state) => {
-                const serialized = {
-                    ...state,
-                    state: {
-                        ...state.state,
-                        stats: {
-                            ...state.state.stats,
-                            topArtists: Array.from(state.state.stats.topArtists.entries()),
-                            topGenres: Array.from(state.state.stats.topGenres.entries()),
-                            uniqueTracks: Array.from(state.state.stats.uniqueTracks),
-                        },
-                    },
-                };
-                return JSON.stringify(serialized);
-            },
-            deserialize: (str) => {
-                const parsed = JSON.parse(str);
+            version: 2,
+            storage: createMapSetJSONStorage(() => localStorage),
+
+            // Stats are derived from plays; only persist plays.
+            partialize: (state) => ({ plays: state.plays }),
+
+            // Recompute stats on hydration (also fixes old corrupted localStorage).
+            merge: (persistedState, currentState) => {
+                const plays = (persistedState && Array.isArray(persistedState.plays))
+                    ? persistedState.plays
+                    : currentState.plays;
+
+                const topArtists = new Map();
+                const uniqueTracks = new Set();
+                let totalListeningTime = 0;
+
+                for (const play of plays) {
+                    const artist = play?.track?.artist;
+                    if (artist) {
+                        topArtists.set(artist, (topArtists.get(artist) || 0) + 1);
+                    }
+                    const trackId = play?.track?.id;
+                    if (trackId) uniqueTracks.add(trackId);
+                    totalListeningTime += (play?.duration || 0);
+                }
+
                 return {
-                    ...parsed,
-                    state: {
-                        ...parsed.state,
-                        stats: {
-                            ...parsed.state.stats,
-                            topArtists: new Map(parsed.state.stats.topArtists),
-                            topGenres: new Map(parsed.state.stats.topGenres),
-                            uniqueTracks: new Set(parsed.state.stats.uniqueTracks),
-                        },
+                    ...currentState,
+                    ...persistedState,
+                    plays,
+                    stats: {
+                        ...currentState.stats,
+                        topArtists,
+                        topGenres: new Map(),
+                        uniqueTracks,
+                        totalListeningTime,
                     },
                 };
             },

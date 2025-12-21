@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import { createMapSetJSONStorage } from './persistStorage';
+
 // Badge definitions
 const BADGES = [
     { id: 'first_search', name: 'Primeiro Passo', icon: 'music-note', description: 'Fez sua primeira busca', condition: (stats) => stats.searchesCount >= 1 },
@@ -234,35 +236,25 @@ const useGamificationStore = create(
         }),
         {
             name: 'music-horizon-gamification',
-            // Custom serializer to handle Sets
-            serialize: (state) => {
-                const serialized = {
-                    ...state,
-                    state: {
-                        ...state.state,
-                        stats: {
-                            ...state.state.stats,
-                            searchedArtists: Array.from(state.state.stats.searchedArtists),
-                            searchedGenres: Array.from(state.state.stats.searchedGenres)
-                        }
-                    }
-                };
-                return JSON.stringify(serialized);
+            version: 2,
+            storage: createMapSetJSONStorage(() => localStorage),
+
+            // Ensure Sets exist even if old localStorage had corrupted values.
+            merge: (persistedState, currentState) => {
+                const merged = { ...currentState, ...persistedState };
+                const persistedStats = persistedState?.stats || {};
+                const stats = { ...currentState.stats, ...persistedStats };
+
+                if (!(stats.searchedArtists instanceof Set)) {
+                    stats.searchedArtists = new Set(Array.isArray(stats.searchedArtists) ? stats.searchedArtists : []);
+                }
+                if (!(stats.searchedGenres instanceof Set)) {
+                    stats.searchedGenres = new Set(Array.isArray(stats.searchedGenres) ? stats.searchedGenres : []);
+                }
+
+                merged.stats = stats;
+                return merged;
             },
-            deserialize: (str) => {
-                const parsed = JSON.parse(str);
-                return {
-                    ...parsed,
-                    state: {
-                        ...parsed.state,
-                        stats: {
-                            ...parsed.state.stats,
-                            searchedArtists: new Set(parsed.state.stats.searchedArtists),
-                            searchedGenres: new Set(parsed.state.stats.searchedGenres)
-                        }
-                    }
-                };
-            }
         }
     )
 );
