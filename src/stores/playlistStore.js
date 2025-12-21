@@ -119,10 +119,18 @@ const usePlaylistStore = create((set, get) => ({
             throw new Error('Spotify não está conectado. Por favor, reconecte sua conta.');
         }
 
+        console.log('[Playlist Export] Start', { playlistId, userId });
+
         const playlist = get().playlists.find(p => p.id === playlistId);
         if (!playlist) {
             throw new Error('Playlist not found');
         }
+
+        console.log('[Playlist Export] Playlist loaded', {
+            name: playlist.name,
+            trackCount: playlist.tracks?.length || 0,
+            alreadyExported: !!playlist.spotifyId,
+        });
 
         try {
             // Create playlist on Spotify
@@ -133,11 +141,23 @@ const usePlaylistStore = create((set, get) => ({
                 true
             );
 
+            console.log('[Playlist Export] Spotify playlist created', {
+                spotifyId: spotifyPlaylist.id,
+                name: spotifyPlaylist.name,
+            });
+
             // Get Spotify URIs for tracks
             // Get Spotify URIs for tracks (Fetch missing ones if needed)
             const trackUris = [];
             for (const track of playlist.tracks) {
                 let uri = track.uri || track.spotifyUri;
+
+                if (!uri) {
+                    console.log('[Playlist Export] Missing URI, searching', {
+                        trackName: track.name,
+                        artist: track.artist,
+                    });
+                }
 
                 // If no URI, try to find it now (Lazy Fetch)
                 if (!uri) {
@@ -168,14 +188,23 @@ const usePlaylistStore = create((set, get) => ({
                 }
 
                 for (const chunk of chunks) {
+                    console.log('[Playlist Export] Adding chunk', { size: chunk.length });
                     await spotifyService.addTracksToPlaylist(spotifyPlaylist.id, chunk);
                 }
+            } else {
+                console.warn('[Playlist Export] No track URIs resolved, skipping track upload');
             }
 
             // Atualizar no backend
             await playlistAPI.update(playlistId, {
                 spotifyId: spotifyPlaylist.id,
                 exported: true
+            });
+
+            console.log('[Playlist Export] Backend updated', {
+                playlistId,
+                spotifyId: spotifyPlaylist.id,
+                exported: true,
             });
 
             // Update local state

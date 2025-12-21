@@ -55,22 +55,42 @@ export const loginWithLastfm = async (token) => {
 export const linkSpotify = async (userId, accessToken) => {
     if (!accessToken) throw buildError('Access token required', 400);
 
+    const tokenPreview = `${accessToken.substring(0, 8)}...`;
+    console.log('[Spotify Link] Starting link flow', { userId, tokenPreview });
+
     const spotifyResponse = await fetch('https://api.spotify.com/v1/me', {
         headers: { Authorization: `Bearer ${accessToken}` },
     });
+
+    console.log('[Spotify Link] /me response status', spotifyResponse.status);
 
     if (!spotifyResponse.ok) throw buildError('Invalid Spotify token', 401);
 
     const spotifyUser = await spotifyResponse.json();
 
+    console.log('[Spotify Link] Retrieved Spotify profile', {
+        spotifyId: spotifyUser.id,
+        displayName: spotifyUser.display_name,
+    });
+
     const existingUser = await prisma.user.findUnique({ where: { spotifyId: spotifyUser.id } });
     if (existingUser && existingUser.id !== userId) {
+        console.warn('[Spotify Link] Spotify account already linked to another user', {
+            spotifyId: spotifyUser.id,
+            existingUserId: existingUser.id,
+            requestUserId: userId,
+        });
         throw buildError('This Spotify account is already connected to another user.', 409);
     }
 
     const updatedUser = await prisma.user.update({
         where: { id: userId },
         data: { spotifyId: spotifyUser.id },
+    });
+
+    console.log('[Spotify Link] Link successful', {
+        userId: updatedUser.id,
+        spotifyId: updatedUser.spotifyId,
     });
 
     return updatedUser;
