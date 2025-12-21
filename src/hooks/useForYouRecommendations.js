@@ -29,7 +29,12 @@ export function useForYouRecommendations(topArtists, topTracks, selectedPeriod, 
             if (useGemini) {
                 // Use the shared recommendation service (same as GeneratePlaylist)
                 const prompt = buildPromptFromContext();
-                const result = await recommendationService.getAIRecommendations(prompt, 30, topArtists);
+                const result = await recommendationService.getAIRecommendations(
+                    prompt, 
+                    20, // limit - fewer tracks for ForYou
+                    topArtists,
+                    { minTracks: 10, maxRetries: 1 } // lighter retry policy
+                );
                 
                 // Set recommendations (service already enriches tracks)
                 setRecommendations({

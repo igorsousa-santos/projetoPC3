@@ -14,19 +14,21 @@ class RecommendationService {
     }
 
     // --- 1. RECOMENDAÇÃO HÍBRIDA (IA) ---
-    async getAIRecommendations(prompt, limit = 25, contextArtists = []) {
+    async getAIRecommendations(prompt, limit = 25, contextArtists = [], { minTracks = 1, maxRetries = 0 } = {}) {
         try {
             const context = await this.gatherUserContext(contextArtists);
 
             const safePromptPreview = String(prompt || '').trim().slice(0, 80);
             console.debug('[RecService] Calling AI generateRecommendations', {
                 limit,
+                minTracks,
+                maxRetries,
                 promptPreview: safePromptPreview,
                 promptLength: String(prompt || '').length,
                 contextTopArtists: Array.isArray(context?.topArtists) ? context.topArtists.length : 0,
             });
 
-            const res = await aiAPI.generateRecommendations(prompt, limit, context);
+            const res = await aiAPI.generateRecommendations(prompt, limit, context, { minTracks, maxRetries });
 
             console.debug('[RecService] AI generateRecommendations response', {
                 success: res?.success,

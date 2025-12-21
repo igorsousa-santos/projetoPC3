@@ -8,72 +8,41 @@ const buildError = (message, status = 400) => {
 };
 
 /**
- * System instructions - Code A's algorithm as instructions for Gemini
+ * System instructions for Gemini to generate track recommendations directly
  */
-const RECOMMENDATION_ALGORITHM_INSTRUCTIONS = `
-Você é um estrategista de recomendações musicais que analisa as solicitações do usuário e cria uma estratégia de busca.
+const TRACK_GENERATION_INSTRUCTIONS = `
+Você é um especialista em recomendações musicais. Sua tarefa é gerar uma lista de músicas reais e conhecidas.
 
-# SUA TAREFA: Analisar a solicitação do usuário e determinar a estratégia de recomendação
+# REGRAS IMPORTANTES:
+1. Retorne APENAS músicas que existem de verdade em serviços de streaming (Spotify, Deezer, Apple Music).
+2. Use os nomes OFICIAIS das faixas e artistas (como aparecem no Spotify/Deezer).
+3. Evite remixes, versões ao vivo, covers ou bootlegs (a menos que especificamente pedido).
+4. Varie os artistas - não repita o mesmo artista mais que 2-3 vezes.
+5. Misture músicas populares com algumas menos conhecidas para variedade.
+6. Se o usuário mencionar artistas específicos, inclua músicas de artistas SIMILARES, não apenas dos mencionados.
 
-## PASSO 1: CLASSIFICAR O TIPO DE SOLICITAÇÃO
+# FORMATO DE SAÍDA:
+Retorne um array JSON de objetos, cada um com:
+- "name": nome exato da música (string)
+- "artist": nome exato do artista principal (string)
+- "reason": breve explicação de por que essa música foi escolhida (string, opcional)
 
-Analise a solicitação do usuário e classifique-a como uma das seguintes:
+Exemplo:
+[
+  {"name": "Creep", "artist": "Radiohead", "reason": "Clássico do rock alternativo dos anos 90"},
+  {"name": "Paranoid Android", "artist": "Radiohead", "reason": "Obra-prima experimental"},
+  {"name": "Bitter Sweet Symphony", "artist": "The Verve", "reason": "Som similar ao Radiohead"}
+]
 
-**BUSCA POR ARTISTA:**
-- O usuário menciona o nome de um artista/banda (ex: "músicas como Radiohead", "música semelhante a Taylor Swift")
-- Intenção: encontrar músicas de artistas semelhantes
-- Extrair: nome do artista
-
-**BUSCA POR FAIXA (TRACK):**  
-- O usuário menciona uma música específica (ex: "Creep do Radiohead", "músicas como Bohemian Rhapsody")
-- Padrões: "[faixa] de [artista]", "[faixa] - [artista]", "músicas como [faixa]"
-- Intenção: encontrar faixas com som semelhante
-- Extrair: nome da faixa, nome do artista (se fornecido)
-
-**BUSCA POR GÊNERO/HUMOR:**
-- O usuário menciona um gênero, humor (mood) ou vibe (ex: "indie rock", "música relaxante para estudar", "rock animado dos anos 80")
-- Inclui: nomes de gêneros, humores (relaxante, animado, triste), atividades (treino, estudo), décadas
-- Intenção: encontrar faixas que correspondam a esse estilo/vibe
-- Extrair: descritor de gênero/tag/humor
-
-Se a solicitação for ambígua ou conversacional, escolha a intenção mais provável.
-
-## PASSO 2: RETORNAR A ESTRATÉGIA
-
-Retorne um objeto JSON com a estratégia de busca. Exemplos:
-
-**Para "músicas como Radiohead":**
-{
-  "type": "artist",
-  "searchTerm": "Radiohead",
-  "explanation": "O usuário quer artistas semelhantes a Radiohead"
-}
-
-**Para "Creep do Radiohead" ou "músicas como Creep":**
-{
-  "type": "track", 
-  "trackName": "Creep",
-  "artistName": "Radiohead",
-  "explanation": "O usuário quer faixas semelhantes a Creep"
-}
-
-**Para "vibe indie relaxante" ou "rock animado anos 80":**
-{
-  "type": "genre",
-  "searchTerm": "indie",
-  "modifier": "relaxante",
-  "explanation": "O usuário quer música indie relaxante"
-}
-
-CRÍTICO: Retorne APENAS JSON válido, sem nenhum outro texto.
+CRÍTICO: Retorne APENAS o array JSON válido, sem markdown, sem explicações extras.
 `.trim();
 
 /**
- * Code A's filtering utilities
+ * Filtering and normalization utilities
  */
 class RecommendationFilters {
     /**
-     * Normalize string for comparison (Code A's normalizeString)
+     * Normalize string for comparison
      */
     static normalizeString(str) {
         if (!str) return '';
@@ -83,7 +52,7 @@ class RecommendationFilters {
     }
 
     /**
-     * Clean track name (Code A's cleanTrackName)
+     * Clean track name for deduplication
      */
     static cleanTrackName(name) {
         if (!name) return '';
@@ -104,7 +73,7 @@ class RecommendationFilters {
 
         // Remove parentheses with specific keywords
         const keywords = ['prod', 'feat', 'ft', 'bootleg', 'remix', 'edit', 'demo',
-            'version', 'slowed', 'reverb', 'mix', 'vip', 'live', 'session'];
+            'version', 'slowed', 'reverb', 'mix', 'vip', 'live', 'session', 'remaster', 'remastered'];
         const noiseRegex = new RegExp(`\\(.*?\\b(?:${keywords.join('|')})\\b.*?\\)`, 'gi');
         cleaned = cleaned.replace(noiseRegex, '');
 
@@ -124,25 +93,14 @@ class RecommendationFilters {
     }
 
     /**
-     * Deduplicate tracks (Code A's deduplicateTracks)
+     * Generate a deduplication key for a track
      */
-    static deduplicateTracks(tracks) {
-        const seen = new Map();
-        const unique = [];
-
-        for (const track of tracks) {
-            const key = `${this.normalizeString(track.name)}_${this.normalizeString(track.artist)}`;
-            if (!seen.has(key)) {
-                seen.set(key, true);
-                unique.push(track);
-            }
-        }
-
-        return unique;
+    static getTrackKey(name, artist) {
+        return `${this.normalizeString(this.cleanTrackName(name))}::${this.normalizeString(artist)}`;
     }
 
     /**
-     * Apply diversity filter (Code A's applyDiversityFilter)
+     * Apply diversity filter (max tracks per artist)
      */
     static applyDiversityFilter(tracks, maxPerArtist = 2) {
         const artistCounts = {};
@@ -162,7 +120,7 @@ class RecommendationFilters {
     }
 
     /**
-     * Shuffle array (Code A's shuffleArray)
+     * Shuffle array
      */
     static shuffleArray(array) {
         const shuffled = [...array];
@@ -175,180 +133,200 @@ class RecommendationFilters {
 }
 
 /**
- * Enhanced recommendation service using Gemini + Last.fm hybrid approach
+ * AI-powered recommendation service: Gemini generates tracks → Last.fm validates → return validated list
+ * Best-effort policy: returns whatever valid tracks found (no failure on low count)
  */
-export const generateRecommendations = async ({ prompt, limit = 20, context = {} }) => {
+export const generateRecommendations = async ({ prompt, limit = 20, context = {}, minTracks = 1, maxRetries = 0 }) => {
     if (!genAI) throw buildError('AI Service not configured', 503);
     if (!prompt || typeof prompt !== 'string') throw buildError('Valid prompt is required', 400);
 
-    prompt = prompt.trim().substring(0, 500);
+    prompt = prompt.trim().substring(0, 1000);
     limit = Math.min(Math.max(parseInt(limit, 10) || 20, 5), 50);
+    minTracks = Math.min(Math.max(parseInt(minTracks, 10) || 1, 1), limit);
+    maxRetries = Math.min(Math.max(parseInt(maxRetries, 10) || 0, 0), 3);
 
-    // STEP 1: Use Gemini to parse the prompt intelligently
-    const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-exp',
-        config: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-                type: 'OBJECT',
-                properties: {
-                    type: { type: 'STRING', enum: ['artist', 'track', 'genre'] },
-                    searchTerm: { type: 'STRING' },
-                    trackName: { type: 'STRING', nullable: true },
-                    artistName: { type: 'STRING', nullable: true },
-                    modifier: { type: 'STRING', nullable: true },
-                    explanation: { type: 'STRING' }
-                },
-                required: ['type', 'explanation']
-            },
-        },
-        contents: [{
-            role: 'user',
-            parts: [{
-                text: `${RECOMMENDATION_ALGORITHM_INSTRUCTIONS}\n\nUser prompt: "${prompt}"\n\nAnalyze and return the strategy.`
-            }]
-        }]
-    });
-
-    const candidates = response.response?.candidates || response.candidates;
-    if (!candidates || !candidates[0] || !candidates[0].content) {
-        throw buildError('Invalid response from Gemini API', 500);
+    // Build context string from user's top artists if available
+    let contextStr = '';
+    if (context.topArtists && Array.isArray(context.topArtists) && context.topArtists.length > 0) {
+        const artistNames = context.topArtists.slice(0, 15).join(', ');
+        contextStr = `\n\nContexto: O usuário gosta destes artistas: ${artistNames}`;
     }
 
-    const strategyText = candidates[0].content.parts[0].text.replace(/```json|```/g, '').trim();
-    const strategy = JSON.parse(strategyText);
+    // Accumulator for validated tracks across retries (dedupe by key)
+    const seenKeys = new Set();
+    const validatedTracks = [];
 
-    console.log('[Enhanced AI] Strategy:', strategy);
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        console.log(`[AI Recs] Attempt ${attempt + 1}/${maxRetries + 1}, have ${validatedTracks.length}/${minTracks} tracks`);
 
-    // STEP 2: Execute Last.fm queries based on Gemini's strategy
-    let lastfmTracks = [];
-
-    try {
-        if (strategy.type === 'artist') {
-            lastfmTracks = await getRecommendationsByArtist(strategy.searchTerm, limit * 3);
-        } else if (strategy.type === 'track') {
-            lastfmTracks = await getRecommendationsByTrack(
-                strategy.trackName || strategy.searchTerm,
-                strategy.artistName,
-                limit * 3
-            );
-        } else if (strategy.type === 'genre') {
-            lastfmTracks = await getRecommendationsByGenre(
-                strategy.searchTerm,
-                strategy.modifier,
-                limit * 3
-            );
+        // STEP 1: Ask Gemini to generate track recommendations
+        const geminiTracks = await generateTracksFromGemini(prompt, limit, contextStr, attempt);
+        
+        if (!geminiTracks || geminiTracks.length === 0) {
+            console.warn('[AI Recs] Gemini returned no tracks on attempt', attempt + 1);
+            continue;
         }
-    } catch (error) {
-        console.error('[Last.fm Error]', error);
-        throw buildError('Failed to fetch music recommendations', 500);
-    }
 
-    // Debug info on raw Last.fm result size and sample
-    console.log('[Enhanced AI] Last.fm tracks count:', lastfmTracks?.length || 0);
-    if (lastfmTracks && lastfmTracks.length > 0) {
-        console.log('[Enhanced AI] Sample track:', lastfmTracks[0]);
-    }
+        console.log(`[AI Recs] Gemini returned ${geminiTracks.length} candidates`);
 
-    // STEP 3: Apply Code A's filtering algorithm
-    let filtered = RecommendationFilters.deduplicateTracks(lastfmTracks);
-    filtered = RecommendationFilters.applyDiversityFilter(filtered, 2);
-    filtered = RecommendationFilters.shuffleArray(filtered);
-    filtered = filtered.slice(0, limit);
+        // STEP 2: Validate each track against Last.fm (ground truth)
+        let newTracksThisAttempt = 0;
+        for (const track of geminiTracks) {
+            if (!track.name || !track.artist) continue;
 
-    console.log('[Enhanced AI] Filtered tracks count:', filtered?.length || 0);
+            const key = RecommendationFilters.getTrackKey(track.name, track.artist);
+            if (seenKeys.has(key)) continue; // Dedupe across attempts
 
-    // If filtered is empty, surface a clear error (no classic fallback)
-    if (!filtered || filtered.length === 0) {
-        console.warn('[Enhanced AI] Zero tracks after filtering. Strategy:', strategy, 'RawCount:', lastfmTracks?.length || 0);
-        throw buildError('AI returned zero tracks after filtering', 502);
-    }
+            const validated = await validateTrackWithLastFm(track.name, track.artist);
+            if (validated) {
+                seenKeys.add(key);
+                validatedTracks.push({
+                    name: validated.name || track.name,
+                    artist: validated.artist || track.artist,
+                    reason: track.reason || 'Recomendado com base no seu gosto'
+                });
+                newTracksThisAttempt++;
 
-    // STEP 4: Return enriched results
-    // Note: Frontend or additional service should enrich with Spotify/album art
-    return filtered.map(track => ({
-        name: track.name,
-        artist: track.artist,
-        reason: strategy.explanation || 'Recommended based on your taste'
-    }));
-};
-
-/**
- * Get recommendations by artist (Code A's algorithm)
- */
-async function getRecommendationsByArtist(artistName, limit) {
-    const normSearchArtist = RecommendationFilters.normalizeString(artistName);
-
-    // Get similar artists
-    const similarArtists = await lastfmService.getSimilarArtists(artistName, 60);
-
-    // Filter out the original artist
-    const filteredSimilar = similarArtists.filter(a => {
-        const norm = RecommendationFilters.normalizeString(a.name);
-        return norm !== normSearchArtist && !norm.includes(normSearchArtist);
-    });
-
-    // Select 20 random artists for variety
-    const selectedArtists = RecommendationFilters.shuffleArray(filteredSimilar).slice(0, 20);
-
-    // Get tracks from each artist (pages 2-10 for variety)
-    const promises = selectedArtists.map(async (artist) => {
-        const randomPage = Math.floor(Math.random() * 9) + 2; // Pages 2-10
-        const tracks = await lastfmService.getTopTracksByArtist(artist.name, 20, randomPage);
-        return RecommendationFilters.shuffleArray(tracks).slice(0, 3);
-    });
-
-    const allTracks = (await Promise.all(promises)).flat();
-
-    // Filter out original artist's tracks
-    return allTracks.filter(track => {
-        const normTrackArtist = RecommendationFilters.normalizeString(track.artist);
-        return normTrackArtist !== normSearchArtist && !normTrackArtist.includes(normSearchArtist);
-    });
-}
-
-/**
- * Get recommendations by track (Code A's algorithm)
- */
-async function getRecommendationsByTrack(trackName, artistName, limit) {
-    try {
-        // If no artist provided, search for the track first
-        if (!artistName) {
-            const searchResults = await lastfmService.searchTrack(trackName, 5);
-            if (searchResults.length > 0) {
-                trackName = searchResults[0].name;
-                artistName = searchResults[0].artist;
-            } else {
-                // Fallback to artist search with the track name
-                return getRecommendationsByArtist(trackName, limit);
+                // Stop early if we have enough
+                if (validatedTracks.length >= limit) break;
             }
         }
 
-        const normSearchArtist = RecommendationFilters.normalizeString(artistName);
+        console.log(`[AI Recs] Validated ${newTracksThisAttempt} new tracks, total: ${validatedTracks.length}`);
 
-        // Get similar tracks
-        const similarTracks = await lastfmService.getSimilarTracks(trackName, artistName, 60);
+        // Stop retrying if we have enough or no progress was made
+        if (validatedTracks.length >= minTracks) break;
+        if (newTracksThisAttempt === 0) {
+            console.log('[AI Recs] No new tracks validated, stopping retries');
+            break;
+        }
+    }
 
-        // Filter out original artist
-        return similarTracks.filter(track => {
-            const normTrackArtist = RecommendationFilters.normalizeString(track.artist);
-            return normTrackArtist !== normSearchArtist && !normTrackArtist.includes(normSearchArtist);
+    // STEP 3: Apply diversity filter and shuffle
+    let finalTracks = RecommendationFilters.applyDiversityFilter(validatedTracks, 3);
+    finalTracks = RecommendationFilters.shuffleArray(finalTracks);
+    finalTracks = finalTracks.slice(0, limit);
+
+    console.log(`[AI Recs] Returning ${finalTracks.length} tracks (requested: ${limit}, min: ${minTracks})`);
+
+    // Best-effort: return whatever we have (even if empty)
+    return finalTracks;
+};
+
+/**
+ * Generate track recommendations using Gemini
+ */
+async function generateTracksFromGemini(prompt, limit, contextStr, attemptNumber) {
+    // Adjust instructions slightly on retries to encourage different results
+    const retryHint = attemptNumber > 0 
+        ? `\n\nIMPORTANTE: Esta é uma nova tentativa. Sugira músicas DIFERENTES das anteriores. Tente artistas menos óbvios mas ainda conhecidos.`
+        : '';
+
+    try {
+        const response = await genAI.models.generateContent({
+            model: 'gemini-2.0-flash-exp',
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema: {
+                    type: 'ARRAY',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            name: { type: 'STRING' },
+                            artist: { type: 'STRING' },
+                            reason: { type: 'STRING', nullable: true }
+                        },
+                        required: ['name', 'artist']
+                    }
+                },
+            },
+            contents: [{
+                role: 'user',
+                parts: [{
+                    text: `${TRACK_GENERATION_INSTRUCTIONS}${contextStr}${retryHint}\n\nSolicitação do usuário: "${prompt}"\n\nGere ${limit} recomendações de músicas.`
+                }]
+            }]
         });
+
+        const candidates = response.response?.candidates || response.candidates;
+        if (!candidates || !candidates[0] || !candidates[0].content) {
+            return [];
+        }
+
+        const text = candidates[0].content.parts[0].text.replace(/```json|```/g, '').trim();
+        const tracks = JSON.parse(text);
+        
+        return Array.isArray(tracks) ? tracks : [];
     } catch (error) {
-        console.error('[Track Search Error]', error);
-        // Fallback to artist search
-        return artistName ? getRecommendationsByArtist(artistName, limit) : [];
+        console.error('[AI Recs] Gemini error:', error.message);
+        return [];
     }
 }
 
 /**
- * Get recommendations by genre/mood (Code A's algorithm)
+ * Validate a track exists using Last.fm track.search
+ * Returns normalized track info if found, null otherwise
  */
-async function getRecommendationsByGenre(genre, modifier, limit) {
-    // Random page for variety
-    const randomPage = Math.floor(Math.random() * 5) + 1;
-    const tracks = await lastfmService.getTopTracksByTag(genre, 100, randomPage);
-    return RecommendationFilters.shuffleArray(tracks);
+async function validateTrackWithLastFm(trackName, artistName) {
+    try {
+        const searchQuery = `${trackName} ${artistName}`;
+        const results = await lastfmService.searchTrack(searchQuery, 5);
+        
+        if (!results || results.length === 0) return null;
+
+        // Find a match where artist name is similar
+        const normalizedArtist = RecommendationFilters.normalizeString(artistName);
+        const normalizedTrack = RecommendationFilters.normalizeString(trackName);
+
+        for (const result of results) {
+            const resultArtist = RecommendationFilters.normalizeString(result.artist);
+            const resultTrack = RecommendationFilters.normalizeString(result.name);
+
+            // Check if artist matches (contains or is contained)
+            const artistMatch = resultArtist.includes(normalizedArtist) || 
+                                normalizedArtist.includes(resultArtist) ||
+                                similarity(resultArtist, normalizedArtist) > 0.7;
+
+            // Check if track name is similar
+            const trackMatch = resultTrack.includes(normalizedTrack) ||
+                               normalizedTrack.includes(resultTrack) ||
+                               similarity(resultTrack, normalizedTrack) > 0.6;
+
+            if (artistMatch && trackMatch) {
+                return {
+                    name: result.name,
+                    artist: result.artist
+                };
+            }
+        }
+
+        return null;
+    } catch (error) {
+        // On error, skip this track (don't block the whole process)
+        console.warn('[AI Recs] Last.fm validation error:', error.message);
+        return null;
+    }
+}
+
+/**
+ * Simple string similarity (Dice coefficient)
+ */
+function similarity(s1, s2) {
+    if (!s1 || !s2) return 0;
+    if (s1 === s2) return 1;
+    
+    const bigrams1 = new Set();
+    const bigrams2 = new Set();
+    
+    for (let i = 0; i < s1.length - 1; i++) bigrams1.add(s1.substring(i, i + 2));
+    for (let i = 0; i < s2.length - 1; i++) bigrams2.add(s2.substring(i, i + 2));
+    
+    let intersection = 0;
+    for (const bigram of bigrams1) {
+        if (bigrams2.has(bigram)) intersection++;
+    }
+    
+    return (2 * intersection) / (bigrams1.size + bigrams2.size);
 }
 
 // Export other existing AI functions (keep backward compatibility)

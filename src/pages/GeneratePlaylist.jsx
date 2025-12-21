@@ -50,7 +50,12 @@ function GeneratePlaylist() {
             // }
 
             console.log('[GeneratePlaylist] Cache miss. Generating...');
-            const { tracks = [], artists = [], albums = [] } = await recommendationService.getAIRecommendations(prompt);
+            const { tracks = [], artists = [], albums = [] } = await recommendationService.getAIRecommendations(
+                prompt, 
+                30, // limit
+                [], // contextArtists
+                { minTracks: 25, maxRetries: 2 } // retry until we have at least 25 tracks
+            );
             setGeneratedTracks(tracks);
 
             // Suggest a name based on the prompt
