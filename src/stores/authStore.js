@@ -156,6 +156,7 @@ const useAuthStore = create((set, get) => ({
         }
 
         console.log('[AuthStore] Spotify Token received.');
+        console.log('[AuthStore] Token preview:', spotifyToken.substring(0, 20) + '...');
 
         // Ensure auth state is loaded (init may still be in-flight on callback page)
         if (!get().isAuthenticated) {
@@ -201,14 +202,14 @@ const useAuthStore = create((set, get) => ({
                 
                 return { success: true, message: 'Spotify vinculado com sucesso!' };
             } else {
-                // If linking failed (e.g. already used), we still keep the token for playback session
-                set({ token: spotifyToken, spotifyConnected: true });
+                // If linking failed (e.g. already used or invalid token), don't mark as connected
+                console.warn('[AuthStore] Spotify link failed:', response.message);
                 return { success: false, message: response.message || 'Erro ao vincular conta.' };
             }
 
         } catch (error) {
             console.error('Error linking Spotify:', error);
-            set({ token: spotifyToken, spotifyConnected: true });
+            // Don't mark as connected if linking failed - token may be invalid
             return { success: false, message: 'Erro ao conectar com o servidor.' };
         }
     },

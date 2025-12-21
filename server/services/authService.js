@@ -64,7 +64,11 @@ export const linkSpotify = async (userId, accessToken) => {
 
     console.log('[Spotify Link] /me response status', spotifyResponse.status);
 
-    if (!spotifyResponse.ok) throw buildError('Invalid Spotify token', 401);
+    if (!spotifyResponse.ok) {
+        const errorBody = await spotifyResponse.text();
+        console.error('[Spotify Link] /me failed:', spotifyResponse.status, errorBody);
+        throw buildError(`Invalid Spotify token: ${spotifyResponse.status}`, 401);
+    }
 
     const spotifyUser = await spotifyResponse.json();
 

@@ -157,6 +157,9 @@ class SpotifyService {
 
             const data = await response.json();
             console.log('[Spotify] Token received successfully.');
+            console.log('[Spotify] Token scopes:', data.scope);
+            console.log('[Spotify] Token expires in:', data.expires_in, 'seconds');
+            console.log('[Spotify] Has refresh token:', !!data.refresh_token);
             this.saveToken(data);
 
             // Clean URL
