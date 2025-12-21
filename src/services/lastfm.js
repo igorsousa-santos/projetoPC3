@@ -299,6 +299,27 @@ class LastFMService {
             albums: albumsResult
         };
     }
+
+async getTopAlbumsByArtist(artist, limit = 5) {
+        try {
+            const data = await this.apiRequest('artist.gettopalbums', {
+                artist: artist,
+                limit: limit
+            });
+            
+            // O Last.fm às vezes retorna um objeto único se houver apenas 1 álbum, ou array se houver vários.
+            const albums = data.topalbums?.album;
+            
+            if (!albums) return [];
+            
+            // Garante que sempre retornamos um array
+            return Array.isArray(albums) ? albums : [albums];
+        } catch (error) {
+            console.warn(`[LastFM] Erro ao buscar álbuns de ${artist}:`, error);
+            return [];
+        }
+    }
+
 }
 
 export default new LastFMService();

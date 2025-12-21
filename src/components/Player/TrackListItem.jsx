@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'; // Adicionado imports do React
 import usePlayerStore from '../../stores/playerStore';
 import useAuthStore from '../../stores/authStore';
 import usePreviewStore from '../../stores/previewStore';
@@ -6,6 +7,58 @@ export default function TrackListItem({ track, index, compact = false }) {
     const playTrack = usePlayerStore(state => state.playTrack);
     const spotifyConnected = useAuthStore(state => state.spotifyConnected);
     const { playPreview, currentTrack, isPlaying, isLoading } = usePreviewStore();
+
+    // --- LÓGICA DE IMAGEM (DEEZER FALLBACK) ---
+    const [finalImage, setFinalImage] = useState(null);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const resolveImage = async () => {
+            // 1. Tenta usar a imagem que já veio nas props (se for válida)
+            let initial = track.imageUrl || track.image;
+            // Se for array do Last.fm, pega a imagem média/grande
+            if (Array.isArray(initial)) initial = initial[2]?.['#text'] || initial[1]?.['#text'];
+
+            // Se a imagem existe e NÃO é o placeholder do Last.fm (a estrela cinza)
+            if (initial && initial !== '' && !initial.includes('2a96cbd8b46e442fc41c2b86b821562f')) {
+                if (isMounted) setFinalImage(initial);
+                return;
+            }
+
+            // 2. Se não tem imagem válida, busca no Deezer
+            if (track.name && track.artist) {
+                try {
+                    const query = encodeURIComponent(`artist:"${track.artist}" track:"${track.name}"`);
+                    // Usa proxy para evitar bloqueio de CORS no navegador
+                    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(`https://api.deezer.com/search?q=${query}&limit=1`)}`;
+                    
+                    const res = await fetch(proxyUrl);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.data && data.data.length > 0) {
+                            const song = data.data[0];
+                            const albumCover = song.album?.cover_medium || song.album?.cover_small;
+                            
+                            if (isMounted && albumCover) {
+                                setFinalImage(albumCover);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // Falha silenciosa, fica sem imagem (usa o gradiente)
+                }
+            }
+        };
+
+        resolveImage();
+
+        return () => { isMounted = false; };
+    }, [track]); // Recarrega se a track mudar
+
+    const hasImage = finalImage && finalImage !== '';
+
+    // --- LÓGICA DO PLAYER ---
 
     const handlePlay = () => {
         if (!spotifyConnected) {
@@ -33,14 +86,13 @@ export default function TrackListItem({ track, index, compact = false }) {
     // Generate a consistent color based on track name
     const getGradientColor = (str) => {
         let hash = 0;
+        if (!str) return 'linear-gradient(135deg, #444, #222)';
         for (let i = 0; i < str.length; i++) {
             hash = str.charCodeAt(i) + ((hash << 5) - hash);
         }
         const hue = hash % 360;
         return `linear-gradient(135deg, hsl(${hue}, 70%, 50%), hsl(${(hue + 60) % 360}, 70%, 40%))`;
     };
-
-    const hasImage = track.imageUrl && track.imageUrl !== '' && track.imageUrl !== 'undefined' && track.imageUrl !== '/default-album.png';
 
     // Compact version for sidebars
     if (compact) {
@@ -51,7 +103,13 @@ export default function TrackListItem({ track, index, compact = false }) {
                     style={{ background: hasImage ? 'transparent' : getGradientColor(track.name) }}
                 >
                     {hasImage ? (
-                        <img src={track.imageUrl} alt={track.name} className="w-full h-full object-cover" crossOrigin="anonymous" onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.style.background = getGradientColor(track.name); }} />
+                        <img 
+                            src={finalImage} 
+                            alt={track.name} 
+                            className="w-full h-full object-cover" 
+                            crossOrigin="anonymous" 
+                            onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.style.background = getGradientColor(track.name); }} 
+                        />
                     ) : (
                         <i className="ph-fill ph-music-note text-white text-lg opacity-70"></i>
                     )}
@@ -82,7 +140,7 @@ export default function TrackListItem({ track, index, compact = false }) {
                     >
                         {hasImage ? (
                             <img
-                                src={track.imageUrl}
+                                src={finalImage}
                                 alt={track.name}
                                 className="w-full h-full object-cover"
                                 crossOrigin="anonymous"
