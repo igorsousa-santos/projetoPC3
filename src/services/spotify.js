@@ -53,8 +53,10 @@ class SpotifyService {
         const codeVerifier = this.generateRandomString(128);
         const codeChallenge = await this.generateCodeChallenge(codeVerifier);
 
+        // Persist verifier across the redirect (duplicate in sessionStorage as a safety net)
         // Store verifier for the callback step
         localStorage.setItem('spotify_code_verifier', codeVerifier);
+        sessionStorage.setItem('spotify_code_verifier', codeVerifier);
 
         const params = new URLSearchParams({
             client_id: this.clientId,
@@ -63,7 +65,9 @@ class SpotifyService {
             scope: SCOPES.join(' '),
             code_challenge_method: 'S256',
             code_challenge: codeChallenge,
-            show_dialog: 'false'
+            show_dialog: 'false',
+            // Echo verifier in state so we can recover if storage gets cleared by the browser
+            state: codeVerifier
         });
 
         return `${SPOTIFY_AUTH_ENDPOINT}?${params.toString()}`;
@@ -93,7 +97,18 @@ class SpotifyService {
         }
 
         // PKCE: Exchange code for token
-        const codeVerifier = localStorage.getItem('spotify_code_verifier');
+        let codeVerifier = localStorage.getItem('spotify_code_verifier') || sessionStorage.getItem('spotify_code_verifier');
+
+        // Recover from state if storage was cleared (some browsers wipe localStorage on redirect)
+        if (!codeVerifier) {
+            const stateVerifier = params.get('state');
+            if (stateVerifier) {
+                codeVerifier = stateVerifier;
+                localStorage.setItem('spotify_code_verifier', codeVerifier);
+                sessionStorage.setItem('spotify_code_verifier', codeVerifier);
+            }
+        }
+
         console.log('[Spotify] Code:', code ? 'Present' : 'Missing');
         console.log('[Spotify] Verifier:', codeVerifier ? 'Present' : 'Missing');
         
@@ -187,6 +202,7 @@ class SpotifyService {
         localStorage.removeItem('spotify_token_expiry');
         localStorage.removeItem('spotify_refresh_token');
         localStorage.removeItem('spotify_code_verifier');
+        sessionStorage.removeItem('spotify_code_verifier');
     }
 
     // Check if Spotify is connected with a valid token
