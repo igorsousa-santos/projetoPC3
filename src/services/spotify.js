@@ -11,7 +11,9 @@ const SCOPES = [
     'user-read-email',
     'user-read-private',
     'playlist-modify-public',
-    'playlist-modify-private'
+    'playlist-modify-private',
+    "playlist-read-private",
+    "playlist-read-collaborative"
 ];
 
 class SpotifyService {
