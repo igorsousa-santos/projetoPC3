@@ -157,17 +157,21 @@ const useAuthStore = create((set, get) => ({
 
         console.log('[AuthStore] Spotify Token received.');
 
-        // Verify if user is logged in
+        // Ensure auth state is loaded (init may still be in-flight on callback page)
         if (!get().isAuthenticated) {
-            // Can't link if not logged in
-            // Store token for playback? Maybe, but better to enforce login.
-            // Actually, we can just keep the token locally for playback if they want, 
-            // but we should warn them they aren't "logged in".
-            // But since the request is to "remove old login code", we strictly treat this as a link action or playback auth.
-            
-            // Let's set the token just so the Player works if they happen to land here, 
-            // but return a message saying "Please login".
-            
+            const hasBackendToken = !!localStorage.getItem('auth_token');
+            if (hasBackendToken) {
+                try {
+                    await get().init();
+                } catch (e) {
+                    console.warn('[AuthStore] init during Spotify callback failed', e);
+                }
+            }
+        }
+
+        // Verify if user is logged in after init attempt
+        if (!get().isAuthenticated) {
+            // Keep token locally for playback but warn user to log in
             set({ token: spotifyToken, spotifyConnected: true });
             return { 
                 success: false, 
